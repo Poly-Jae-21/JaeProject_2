@@ -1,16 +1,18 @@
-# This is a sample Python script.
+from torch.utils.tensorboard import SummaryWriter
+import os
+from model.train import train
+import yaml
+import logging
+import argparse
+from model.build import argument
+from torch.utils.tensorboard import SummaryWriter
+def main(config):
+    logging.info(f"Start meta-training, experiment name: {config['name']}")
+    logging.info(f"config: {config}")
 
-# Press ⌃R to execute it or replace it with your code.
-# Press Double ⇧ to search everywhere for classes, files, tool windows, actions, and settings.
+    writer = SummaryWriter(os.path.join(config["path"], "tb"))
+    train(config, writer=writer)
 
-
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press ⌘F8 to toggle the breakpoint.
-
-
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+if __name__ == "__main__":
+    config = argument()
+    main(config)
