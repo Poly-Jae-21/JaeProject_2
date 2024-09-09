@@ -9,8 +9,8 @@ import gymnasium as gym
 from env.utils.data_conversion import Polygon_to_matrix
 class ChicagoEnv():
 
-    def __init__(self):
-        self.max_steps = 100
+    def __init__(self, config):
+        self.max_steps = config['max_steps'] # default: 100
         self.episode_count = 0
         self.action_space = 0
 

@@ -1,0 +1,5 @@
+2024-09-09T12:45:04US Eastern Daylight Time | INFO     | Start meta-training, experiment name: logging
+2024-09-09T12:45:04US Eastern Daylight Time | INFO     | config: {'device_id': 'cpu', 'seed': 42, 'epochs': 1000, 'max_episode_steps': 100, 'gamma': 0.95, 'inner_steps': 2, 'inner_lr': 0.001, 'outer_lr': 0.01, 'actor_critic': {'hidden_size': 128}, 'a2c': {'value_coeff': 0.5}, 'name': 'logging', 'debug': False, 'path': 'runs/logging', 'device': device(type='cpu')}
+2024-09-09T12:45:04US Eastern Daylight Time | WARNING  | C:\Users\S2HubLab\PycharmProjects\pythonProject\.venv\Lib\site-packages\gym\envs\registration.py:555: UserWarning: [33mWARN: The environment Chicago-v0 is out of date. You should consider upgrading to version `v1`.[0m
+  logger.warn(
+

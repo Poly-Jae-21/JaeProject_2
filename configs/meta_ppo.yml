@@ -1,8 +1,9 @@
 device_id: cpu
 seed: 42
-epochs: 1000
-max_episode_steps: 100
+epochs: 10000
+max_steps: 100
 gamma: 0.95
+batch_size: 32
 
 inner_steps: 2
 inner_lr: 1.0e-3

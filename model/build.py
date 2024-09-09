@@ -8,9 +8,9 @@ from utils.logger import configure_logger
 
 def argument():
     parser = argparse.ArgumentParser(description="Using PPO for solving multiple cities planning for EVFCS placement problems")
-    parser.add_argument('-n', '--name', type=str)
+    parser.add_argument('-n', '--name', default='logging', type=str)
     parser.add_argument('-d', '--debug', action='store_true', help="run in Debug mode")
-    parser.add_argument('-c', '--config', type=str, default='configs/meta_rl_ppo.yaml')
+    parser.add_argument('-c', '--config', type=str, default='configs/meta_ppo.yml')
     args = parser.parse_args()
     with open(args.config, "r", encoding="utf-8") as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
