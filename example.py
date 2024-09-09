@@ -1,12 +1,7 @@
-import matplotlib.pyplot as plt
+from model.build import argument
+from env.MultiCity.Chicago.chicago import ChicagoEnv
 
-times1 = []
-times2 = []
+config = argument()
 
-
-fig, ax = plt.subplots()
-
-ax.set(xlim=(-30,1050), ylim=(-220,250))
-ax.set_xlabel('Number of training episodes')
-ax.set_ylabel('Training loss')
-plt.show()
+env = ChicagoEnv(config)
+a = env.reset()
