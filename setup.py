@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='meta_city_environment',
-    version='1.0.0',
+    version='3.0.0',
     description='Generalizable urban planning for EVFCS placement',
     author='Jae Heo',
     author_email='heo27@purdue.edu',
@@ -10,7 +10,7 @@ setup(
     packages=find_packages(exclude=["contrib", "docs", "tests"]),
     classifiers=[
         "Intended Audience :: Science/Research",
-        "Programming Language :: Python :: 3.12"
+        "Programming Language :: Python :: 3.11"
     ],
     install_requires=['numpy', 'gym>0.26.1', 'pyglet']
 )

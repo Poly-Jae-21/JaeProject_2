@@ -11,10 +11,10 @@ class Polygon_to_matrix():
 
     def transform_data_landuse(self, gdf):
         # Step 1: Read the Shapefile
-        gdf2 = gg.vector.extract_xy(gdf)
-        gdf2.X, gdf2.Y = np.trunc(gdf2.X / 10), np.trunc(gdf2.Y / 10)
+        #gdf2 = gg.vector.extract_xy(gdf)
+        #gdf2.X, gdf2.Y = np.trunc(gdf2.X / 10), np.trunc(gdf2.Y / 10)
 
-        max_x, min_x, max_y, min_y = int(np.max(gdf2.X)), int(np.min(gdf2.X)), int(np.max(gdf2.Y)), int(np.min(gdf2.Y))
+        #max_x, min_x, max_y, min_y = int(np.max(gdf2.X)), int(np.min(gdf2.X)), int(np.max(gdf2.Y)), int(np.min(gdf2.Y))
 
         # Step 2: Define the geometry and transform
 
@@ -41,8 +41,10 @@ class Polygon_to_matrix():
 
         # Calculate the number of columns and rows for the raster
         x_min, y_min, x_max, y_max = bounds
+
         width = int((x_max - x_min) / resolution)
         height = int((y_max - y_min) / resolution)
+        x_min, y_min, x_max, y_max = x_min / resolution, y_min / resolution, x_max / resolution, y_max / resolution
 
         transform = rasterio.transform.from_origin(west=x_min, north=y_max, xsize=resolution, ysize=resolution)
 
@@ -53,7 +55,31 @@ class Polygon_to_matrix():
         # Step 4: Convert the raster to a NumPy array
         numpy_array = np.array(raster)
 
-        return numpy_array, gdf2, max_x, min_x, max_y, min_y
+        return numpy_array, gdf, x_min, y_min, x_max, y_max
+
+    def transform_data_community_boundary(self, gdf):
+        if 'area_numbe' not in gdf.columns:
+            raise ValueError("The shapefile does not contain a 'area_number' in column.")
+        try:
+            gdf['area_numbe'] = gdf['area_numbe'].astype(int)
+        except:
+            raise ValueError("The 'area_number' column contains non-numeric values.")
+
+        bounds = gdf.total_bounds
+        resolution = 10
+        x_min, y_min, x_max, y_max = bounds
+        width = int((x_max - x_min) / resolution)
+        height = int((y_max - y_min) / resolution)
+        x_min, y_min, x_max, y_max = x_min / resolution, y_min / resolution, x_max / resolution, y_max / resolution
+
+        transform = rasterio.transform.from_origin(west=x_min, north=y_max, xsize=resolution, ysize=resolution)
+
+        shapes = ((geom, code) for geom, code in zip(gdf.geometry, gdf['area_numbe']))
+        raster = rasterize(shapes=shapes, out_shape=(height, width), transform=transform, fill=0, dtype='int32')
+
+        numpy_array = np.array(raster)
+
+        return numpy_array, gdf, x_min, y_min, x_max, y_max
 
     def transform_data_transmission(self, gdf):
         # Step 1: Read the Shapefile
