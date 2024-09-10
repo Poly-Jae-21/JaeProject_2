@@ -1,4 +1,5 @@
 import logging
+import gymnasium
 from gym import envs
 from gym.envs.registration import register, registry
 

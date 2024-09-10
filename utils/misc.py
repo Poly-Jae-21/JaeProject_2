@@ -6,6 +6,9 @@ import numpy as np
 import torch.nn as nn
 from moviepy.editor import ImageSequenceClip
 
+import os
+os.environ["IMAGEIO_FFMPEG_EXE"] = "/usr/bin/ffmpeg"
+
 class Actor(nn.Module):
     def _distribution(self, obs):
         raise NotImplementedError
