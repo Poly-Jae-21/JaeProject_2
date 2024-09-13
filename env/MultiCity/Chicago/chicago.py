@@ -1,4 +1,6 @@
 import math
+from collections.abc import Mapping
+
 import numpy as np
 import pandas as pd
 import gemgis as gg
@@ -23,16 +25,17 @@ class ChicagoEnv():
         self.boundary_x = 0
         self.boundary_y = 0
 
+        self.test = config['test'] #default: False
+
     def Chicago_data(self):
 
         # Boundary map data (Shape file)
         read_community_boundary_data = read_dataframe("env/MultiCity/Chicago/data/community_boundary_map/geo_export_b5a56d3a9_Project.shp")
-        boundary_data, boundary_gdf, boundary_maxx, baoundary_minx, boundary_maxy, baoundary_miny = Polygon_to_matrix().transform_data_landuse(read_community_boundary_data)
-        
+        boundary_numpy, boundary_gdf, boundary_minX, boundary_minY, boundary_maxX, boundary_maxY = Polygon_to_matrix().transform_data_landuse(read_community_boundary_data)
 
         # Landuse data (matrix format)
         read_landuse_data = read_dataframe('env/MultiCity/Chicago/data/landuse_map/Landuse2018_Dissolve_Pr_Clip.shp')
-        landuse_data, landuse_gdf, landuse_maxx, landuse_minx, landuse_maxy, landuse_miny = Polygon_to_matrix().transform_data_landuse(read_landuse_data)
+        landuse_numpy, landuse_gdf, landuse_minX, landuse_minY, landuse_maxX, landuse_maxY = Polygon_to_matrix().transform_data_landuse(read_landuse_data)
 
         # Existing charging infrastructure location data (shape file) = test (validation)
         existing_charging_infra = read_dataframe("env/MultiCity/Chicago/data/existing_infrastructure_map/Alternative_Fuel_Loc_Pr_Clip.shp")
@@ -51,11 +54,12 @@ class ChicagoEnv():
         traffic_volume_lower_array = traffic_volume.index[(raw_traffic_volume <= traffic_volume_lower_outlier)]
         traffic_volume = traffic_volume.drop(traffic_volume_upper_array, axis=0)
         traffic_volume = traffic_volume.drop(traffic_volume_lower_array, axis=0)
+        traffic_volume["grid_code"] = traffic_volume["grid_code"] / 2 # Consider the share of EV sales in estimating charging demand through traffic count data: 50% target goal of U.S. in 2030
+        traffic_volume["grid_code"] = traffic_volume["grid_code"] * 0.28 # Consider the probability of visiting a charging station based on the traffic flow, 28% assumed by Liu et al. 2023 paper
 
         # Transmission line location data
         read_transmission_line_data = read_dataframe('env/MultiCity/Chicago/data/transmission_line_map/geo_export_d59_Polyg_Pr_Clip.shp')
-        transmission_line_data, transmission_line_gdf, transmission_line_maxx, transmission_line_minx, transmission_line_maxy, transmission_line_miny = Polygon_to_matrix().transform_data(read_transmission_line_data)
-
+        transmission_line_numpy, transmission_line_gdf, transmission_line_minX, transmission_line_minY, transmission_line_maxX, transmission_line_maxY = Polygon_to_matrix().transform_data_transmission(read_transmission_line_data)
 
         # Potential electricity data from zipped file
         file_path = "env/MultiCity/Chicago/data/potential_electricity_map/rooftop_vector-20230817T071422Z-001.zip"
@@ -73,65 +77,69 @@ class ChicagoEnv():
         potential_electricity = potential_electricity.drop(potential_electricity_lower_array, axis=0)
 
         # raw (x,y) extent to grid coordinates ( 0 to max)
-        self.min_x = int(np.min(landuse_minx, transmission_line_minx, int(np.min(np.concatenate(traffic_volume.X, potential_electricity.X), axis=0))))
-        self.max_x = int(np.max(landuse_maxx, transmission_line_maxx, int(np.max(np.concatenate(traffic_volume.X, potential_electricity.X), axis=0))))
-        self.min_y = int(np.min(landuse_miny, transmission_line_miny, int(np.min(np.concatenate(traffic_volume.Y, potential_electricity.Y), axis=0))))
-        self.max_y = int(np.max(landuse_maxy, transmission_line_maxy, int(np.max(np.concatenate(traffic_volume.Y, potential_electricity.Y), axis=0))))
+        self.min_x = int(np.min(boundary_minX,landuse_minX, transmission_line_minX, int(np.min(np.concatenate(traffic_volume.X, existing_charging_infra.X, potential_electricity.X), axis=0))))
+        self.max_x = int(np.max(boundary_maxX, landuse_maxX, transmission_line_maxX, int(np.max(np.concatenate(traffic_volume.X, existing_charging_infra.X, potential_electricity.X), axis=0))))
+        self.min_y = int(np.min(boundary_minY, landuse_minY, transmission_line_minY, int(np.min(np.concatenate(traffic_volume.Y, existing_charging_infra.Y, potential_electricity.Y), axis=0))))
+        self.max_y = int(np.max(boundary_maxY, landuse_maxY, transmission_line_maxY, int(np.max(np.concatenate(traffic_volume.Y, existing_charging_infra.Y, potential_electricity.Y), axis=0))))
 
-        landuse_gdf.X, landuse_gdf.Y = landuse_gdf.X - self.min_x, landuse_gdf.Y - self.min_y
-        transmission_line_gdf.X, transmission_line_gdf.Y = transmission_line_gdf.X - self.min_x, transmission_line_gdf.Y - self.min_y
         traffic_volume.X, traffic_volume.Y = traffic_volume.X - self.min_x, traffic_volume.Y - self.min_y
         potential_electricity.X, potential_electricity.Y = potential_electricity.X - self.min_x, potential_electricity.Y - self.min_y
 
-        return landuse_data, existing_charging_infra, transmission_line_data, traffic_volume, potential_electricity, landuse_gdf, transmission_line_gdf
+        return boundary_numpy, landuse_numpy, existing_charging_infra, transmission_line_numpy, traffic_volume, potential_electricity, boundary_gdf, landuse_gdf, transmission_line_gdf
 
     def Mapping(self):
 
-        obj1, obj2, obj3, obj4, obj5, obj1_2, obj3_2 = self.Chicago_data() # landuse_data, existing_charging_infra, transmission_line, traffic_volume, potential_electricity
+        obj1, obj2, obj3, obj4, obj5, obj6, obj1_2, obj2_2, obj4_2 = self.Chicago_data() # boundary_data, landuse_data, existing_charging_infra, transmission_line, traffic_volume, potential_electricity
 
+        """
+        Data format
+        obj1 (boundary), obj2 (landuse), obj4 (transmission): numpy matrix 
+        obj3 (existing charging infra), obj5 (traffic volume), obj6 (potential electricity): gdf 
+        oj1_2 (boundary), obj2_2 (landuse), obj4_2 (transmission): gdf
+        
+        obj1, obj2, obj4 do not need to convert it into numpy matrix.
+        obj3, obj5, obj6 do need to convert it into numpy matrix.
+        
+        obj1_2, will use it on storing and managing the locations of potential fast charging stations to define the distribution probability of starting locations
+        
+        """
         Matrix_x_size, Matrix_y_size = int(self.max_x - self.min_x), int(self.max_y - self.min_y)
         self.boundary_x, self.boundary_y = Matrix_x_size, Matrix_y_size
 
-        MAP = np.zeros(shape=(Matrix_y_size+1, Matrix_x_size+1, 3)) # astype = np.int32
+        MAP = np.zeros(shape=(Matrix_y_size+1, Matrix_x_size+1, 4)) # astype = np.int32, Environment (MAP) has four layers, including (1) boundary map, (2) landuse, (3) various geometry data (e.g., potential CS locations, transmission lines, charging demand = road network), (4) potential electricity = building information
 
-        if min(obj1_2.X) > self.min_x:
-            null = np.zeros(shape=(Matrix_y_size+1, min(obj1_2.X) - self.min_x))
-            adjusted_obj1 = np.hstack((obj1, null))
-            if min(obj1_2.Y) > self.min_y:
-                null = np.zeros(shape=(min(obj1_2.Y) - self.min_y, Matrix_x_size+1))
-                adjusted_obj1 = np.vstack((adjusted_obj1, null))
-            MAP[:,:,0] = adjusted_obj1
+        obj1_slice = np.stack([obj1]*4, axis=2)
+        obj2_slice = np.stack([obj2]*4, axis=2)
+        obj4_slice = np.stack([obj4]*4, axis=2)
 
-        for ii1 in range(len(obj2)):
-            x_val_1, y_val_1 = int(obj2.iloc[ii1,-2]), int(obj2.iloc[ii1, -1])
-            if x_val_1 > self.max_x or x_val_1 < self.min_x or y_val_1 > self.max_y or y_val_1 < self.min_y:
+        MAP[0] = obj1_slice[:,:,0] # first layer of boundary map
+
+        MAP[1] = obj2_slice[:,:,0] # second layer of landuse map
+
+        MAP[2] = obj4_slice[:,:,1] + MAP[2] # third layer of geometric data for transmission lines
+
+        for ii3 in range(len(obj5)):
+            x_val_5, y_val_5 = int(obj5.iloc[ii3, -2]), int(obj5.iloc[ii3, -1])
+            traffic_volume_count = obj5.iloc[ii3, -4]
+            if x_val_5 > self.max_x or x_val_5 < self.min_x or y_val_5 > self.max_y or y_val_5 < self.min_y:
                 continue
             else:
-                MAP[Matrix_y_size - y_val_1, x_val_1 - self.min_x, 0] = 2
+                MAP[Matrix_y_size - y_val_5, x_val_5 - self.min_x, 2] = traffic_volume_count
 
-        for ii2 in range(len(obj3)):
-            x_val_2, y_val_2 = int(obj3.iloc[ii2, -2]), int(obj3.iloc[ii2, -1]) # it will be changed depending on the data structure
-            if x_val_2 > self.max_x or x_val_2 < self.min_x or y_val_2 > self.max_y or y_val_2 < self.min_y:
+        for ii4 in range(len(obj6)):
+            x_val_6, y_val_6 = int(obj6.iloc[ii4, -2]), int(obj6.iloc[ii4, -1])
+            potential_electricity_value = obj6.iloc[ii4, -4]
+            if x_val_6 > self.max_x or x_val_6 < self.min_x or y_val_6 > self.max_y or y_val_6 < self.min_y:
                 continue
             else:
-                MAP[Matrix_y_size - y_val_2, x_val_2 - self.min_x, 0] = 3
-
-        for ii3 in range(len(obj4)):
-            x_val_3, y_val_3 = int(obj4.iloc[ii3, -2]), int(obj4.iloc[ii3, -1])
-            traffic_volume_count = obj4.iloc[ii3, -4]
-            if x_val_3 > self.max_x or x_val_3 < self.min_x or y_val_3 > self.max_y or y_val_3 < self.min_y:
-                continue
-            else:
-                MAP[Matrix_y_size - y_val_3, x_val_3 - self.min_x, 1] = traffic_volume_count
-
-        for ii4 in range(len(obj5)):
-            x_val_4, y_val_4 = int(obj5.iloc[ii4, -2]), int(obj5.iloc[ii4, -1])
-            potential_electricity_value = obj5.iloc[ii4, -4]
-            if x_val_4 > self.max_x or x_val_4 < self.min_x or y_val_4 > self.max_y or y_val_4 < self.min_y:
-                continue
-            else:
-                MAP[Matrix_y_size - y_val_4, x_val_4 - self.min_x, 2] = potential_electricity_value
-
+                MAP[Matrix_y_size - y_val_6, x_val_6 - self.min_x, 3] = potential_electricity_value
+        if self.test == True:
+            for ii5 in range(len(obj3)):
+                x_val_3, y_val_3 = int(obj3.iloc[ii5, -2]), int(obj3.iloc[ii5, -1])
+                if x_val_3 > self.max_x or x_val_3 < self.min_x or y_val_3 > self.max_y or y_val_3 < self.min_y:
+                    continue
+                else:
+                    MAP[Matrix_y_size - y_val_3, x_val_3 - self.min_x, 3] = 2
         return MAP
 
     def Partial_Observation(self, agent_position, MAP):
@@ -169,6 +177,14 @@ class ChicagoEnv():
         self.normalized_fully_environment = np.copy(self.fully_environment)
         self.normalized_fully_environment[:,:,1] = normalized_traffic
         self.normalized_fully_environment[:,:,2] = normalized_electric
+
+        """
+        ### New version ###
+        We update the method of staring point definition from random/fixed to - distribution probability of starting point 
+        Detailed explanation is in the reference paper (J Heo & SW Chang, 2025) 
+         
+        """
+
 
         initial_position_list = np.random.permutation(np.argwhere(self.fully_environment[:,:,0] == 1)).astype('int32')
         initial_position = initial_position_list[0]

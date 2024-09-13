@@ -10,11 +10,6 @@ class Polygon_to_matrix():
         self.data = 0
 
     def transform_data_landuse(self, gdf):
-        # Step 1: Read the Shapefile
-        #gdf2 = gg.vector.extract_xy(gdf)
-        #gdf2.X, gdf2.Y = np.trunc(gdf2.X / 10), np.trunc(gdf2.Y / 10)
-
-        #max_x, min_x, max_y, min_y = int(np.max(gdf2.X)), int(np.min(gdf2.X)), int(np.max(gdf2.Y)), int(np.min(gdf2.Y))
 
         # Step 2: Define the geometry and transform
 
@@ -82,19 +77,14 @@ class Polygon_to_matrix():
         return numpy_array, gdf, x_min, y_min, x_max, y_max
 
     def transform_data_transmission(self, gdf):
-        # Step 1: Read the Shapefile
-        gdf2 = gg.vector.extract_xy(gdf)
-        gdf2.X, gdf2.Y = np.trunc(gdf2.X / 10), np.trunc(gdf2.Y / 10)
-
-        max_x, min_x, max_y, min_y = int(np.max(gdf2.X)), int(np.min(gdf2.X)), int(np.max(gdf2.Y)), int(np.min(gdf2.Y))
 
         # Ensure the land use codes are in the dataframe
-        if 'LEFT_FID' not in gdf.columns:
-            raise ValueError("The shapefile does not contain a 'LEFT_FID' column.")
+        if 'EV_DC_Fast_Count' not in gdf.columns:
+            raise ValueError("The shapefile does not contain a 'EV_DC_Fast_Count' column.")
         try:
-            gdf['LEFT_FID'] = gdf['LEFT_FID'].astype(int)
+            gdf['EV_DC_Fast_Count'] = gdf['EV_DC_Fast_Count'].astype(int)
         except ValueError:
-            raise ValueError("The 'LEFT_FID' column contains non-numeric values.")
+            raise ValueError("The 'EV_DC_Fast_Count' column contains non-numeric values.")
 
         # Step 2: Define the geometry and transform
         bounds = gdf.total_bounds  # get bounds of the shapefile
@@ -108,14 +98,14 @@ class Polygon_to_matrix():
         transform = rasterio.transform.from_origin(west=x_min, north=y_max, xsize=resolution, ysize=resolution)
 
         # Step 3: Rasterize the geometries with land use codes
-        shapes = ((geom, code) for geom, code in zip(gdf.geometry, gdf['LEFT_FID']))
+        shapes = ((geom, code) for geom, code in zip(gdf.geometry, gdf['EV_DC_Fast_Count']))
         raster = rasterize(shapes=shapes, out_shape=(height, width), transform=transform, fill=0, dtype='int32')
 
         # Step 4: Convert the raster to a NumPy array
         numpy_array = np.array(raster)
         numpy_array[numpy_array != 0] = 1
 
-        return numpy_array, gdf2, max_x, min_x, max_y, min_y
+        return numpy_array, gdf, x_min, y_min, x_max, y_max
 
     def save_data(self, numpy_array):
         csv_path = 'env/utils/output_matrix_v5.csv'

@@ -14,3 +14,5 @@ actor_critic:
 
 a2c:
   value_coeff: 0.5
+
+test: False
