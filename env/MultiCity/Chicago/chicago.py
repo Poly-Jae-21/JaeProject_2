@@ -1,4 +1,5 @@
 import math
+import random
 from collections.abc import Mapping
 
 import numpy as np
@@ -7,6 +8,7 @@ import gemgis as gg
 from pyogrio import read_dataframe
 from sklearn import preprocessing
 import gymnasium as gym
+import random
 
 from env.utils.data_conversion import Polygon_to_matrix
 class ChicagoEnv():
@@ -26,6 +28,10 @@ class ChicagoEnv():
         self.boundary_y = 0
 
         self.test = config['test'] #default: False
+
+        self.spdp_list = [1/76] * 76 # the list of starting_point_distribution_probability
+
+        self.boundary_gdf = None
 
     def Chicago_data(self):
 
@@ -163,11 +169,10 @@ class ChicagoEnv():
         return output_action
 
     def reset(self):
-        self.time_step = 0
-        self.capacity = 0
 
         self.fully_environment = self.Mapping()
 
+        '''
         min_max_scaler_traffic = preprocessing.MinMaxScaler()
         normalized_traffic = min_max_scaler_traffic.fit_transform(self.fully_environment[:,:,1])
 
@@ -177,6 +182,8 @@ class ChicagoEnv():
         self.normalized_fully_environment = np.copy(self.fully_environment)
         self.normalized_fully_environment[:,:,1] = normalized_traffic
         self.normalized_fully_environment[:,:,2] = normalized_electric
+        '''
+
 
         """
         ### New version ###
@@ -200,6 +207,21 @@ class ChicagoEnv():
         initial_observation = self.Partial_Observation(initial_position, self.normalized_fully_environment)
 
         return initial_position, initial_observation, self.fully_environment, self.normalized_fully_environment
+    def reset_free(self, env, action_record):
+        self.time_step = 0
+        self.capacity = 0
+        if self.episode_count == 0:
+            self.boundary_gdf['number_of_selection'] = 0
+            self.boundary_gdf['capacity'] = 0
+            self.boundary_gdf['probability'] = 0
+            self.boundary_gdf['probability'] = self.spdp_list
+
+            select_community = random.randint(1,76)
+            boundary = env[0,:,]
+
+
+            return self.boundary_gdf
+
 
     def step(self, action_record):
         action_record = action_record
@@ -318,5 +340,7 @@ class ChicagoEnv():
             self.episode_count += 1
 
         info = {"reward_1": reward_1, "reward_2": reward_2, "reward_3": reward_3, "reward_4": reward_4, "step_reward": step_reward}
+
+
 
         return next_observation, step_reward, done, info, normalized_next_observation
