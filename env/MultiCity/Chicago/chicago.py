@@ -11,6 +11,9 @@ import gymnasium as gym
 import random
 
 from env.utils.data_conversion import Polygon_to_matrix
+from example import selected_position
+
+
 class ChicagoEnv():
 
     def __init__(self, config):
@@ -207,21 +210,55 @@ class ChicagoEnv():
         initial_observation = self.Partial_Observation(initial_position, self.normalized_fully_environment)
 
         return initial_position, initial_observation, self.fully_environment, self.normalized_fully_environment
-    def reset_free(self, env, action_record):
+    def reset_free(self, env, action_record, probability_list):
         self.time_step = 0
         self.capacity = 0
-        if self.episode_count == 0:
+        boundary = env[0, :, ]
+        if self.episode_count + 1 == 1:
             self.boundary_gdf['number_of_selection'] = 0
             self.boundary_gdf['capacity'] = 0
             self.boundary_gdf['probability'] = 0
             self.boundary_gdf['probability'] = self.spdp_list
 
             select_community = random.randint(1,76)
-            boundary = env[0,:,]
+            initial_positions_list = np.argwhere(boundary == select_community)
+            if initial_positions_list.size > 0:
+                selected_initial_position = random.choice(initial_positions_list)
+                selected_initial_position = np.array([selected_initial_position])
+                initial_observation = self.Partial_Observation(selected_initial_position, env)
+                return selected_initial_position, initial_observation
+            else:
+                print("No positions with the value 3 found.")
 
+        elif 2 <= self.episode_count +1 <= 30:
+            select_community = random.randint(1, 76)
+            medium_positions_list = np.argwhere(boundary == select_community)
+            if medium_positions_list.size > 0:
+                selected_medium_position = random.choice(medium_positions_list)
+                selected_medium_position = np.array([selected_medium_position])
+                medium_observation = self.Partial_Observation(selected_medium_position, env)
+                return selected_medium_position, medium_observation
+            else:
+                print("No positions with the value 3 found.")
+                """
+                Need to except condition to select the community where charging stations are excessively installed. 
+                """
 
-            return self.boundary_gdf
+        else:
+            updated_weight_list = 1 / (np.exp(probability_list) + len(self.boundary_gdf))
+            updated_probability_list = updated_weight_list / sum(updated_weight_list)
+            self.spdp_list.append(updated_probability_list)
+            self.boundary_gdf['probability'] = np.average(self.spdp_list[-1], self.spdp_list[-2], self.spdp_list[-3])
 
+            selected_community = random.choices(population=[i+1 for i in range(76)], weights=self.spdp_list, k=1)
+            high_positions_list = np.argwhere(boundary == selected_community)
+            if high_positions_list.size > 0:
+                selected_high_position = random.choice(high_positions_list)
+                selected_high_position = np.array([selected_high_position])
+                high_observation = self.Partial_Observation(selected_high_position, env)
+                return selected_high_position, high_observation
+            else:
+                print("No positions with the value 3 found.")
 
     def step(self, action_record):
         action_record = action_record
