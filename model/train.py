@@ -17,26 +17,15 @@ from env.MultiCity.Chicago.chicago import ChicagoEnv
 
 def train(config, writer: SummaryWriter = None):
 
-    env1 = gym.vector.make("Chicago-v0", num_envs=3)
-    env2 = gym.vector.make("Chicago-v0", num_envs=3)
-    env3 = gym.vector.make("Chicago-v0", num_envs=3)
-    envs = [env1, env2, env3] # it will be updated when I fix all problems and finish creating other cities' environment
-    random.shuffle(envs)
-    test_env = [env1]
+    env = gym.vector.make("Chicago-v0", num_envs=3)
+    test_env = gym.vector.make("Chicago-v0", num_envs=3)
 
     # Set the meta-parameter
     gamma = nn.Parameter(-torch.log(( 1 / torch.tensor(config["gamma"])) - 1), requires_grad=True)
 
     for meta_epoch in range(config["meta_epochs"]):
-        if meta_epoch <= 1000:
-            env = envs[0]
-        elif 1000 < meta_epoch >= 2000:
-            env = envs[1]
-        else:
-            env = envs[2]
 
         agent = PPO(obs_space=env.observation_space, action_space=env.action_space, value_coeff=config["ppo"]["value_coeff"], writer=writer, ac_kwargs=config["actor_critic"], max_episode_steps=config["max_episode_steps"], device=config["device"])
-
         meta_optim = torchopt.SGD([gamma], lr=config["outer_lr"])
         inner_optim = torchopt.MetaSGD(agent.actor_critic, lr=config["inner_lr"])
 

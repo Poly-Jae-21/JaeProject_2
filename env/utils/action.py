@@ -3,8 +3,10 @@ from torch.autograd import Variable
 import numpy as np
 import torch.distributions as distributions
 
+
 class Action(object):
-    def __init__(self, env, actor, critic, observation, state):
+    def __init__(self, config, env, actor, critic, observation, state):
+        self.config = config
         self.env = env
         self.actor = actor
         self.critic = critic
@@ -12,12 +14,8 @@ class Action(object):
         self.state = state
 
     def select_action(self, state):
-        if torch.cuda.is_available():
-            device = torch.device("cuda", 0)
-        elif torch.backends.mps.is_available():
-            device = torch.device("mps", 0)
-        else:
-            device = torch.device("cpu", 0)
+
+        device = self.config.device
 
         state = Variable(torch.Tensor(state))
         log_probs = self.actor(state).to(device)
