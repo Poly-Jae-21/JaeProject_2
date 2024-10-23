@@ -1,5 +1,4 @@
 import torch
-from torch.autograd import Variable
 import numpy as np
 import torch.distributions as distributions
 
@@ -12,22 +11,6 @@ class Action(object):
         self.critic = critic
         self.observation = observation
         self.state = state
-
-    def select_action(self, state):
-
-        device = self.config.device
-
-        state = Variable(torch.Tensor(state))
-        log_probs = self.actor(state).to(device)
-        value = self.critic(state).to(device)
-
-        dist = distributions.Normal(log_probs, scale=0.1)
-        action = dist.sample()
-        log_prob = dist.log_prob(action)
-        action = torch.clamp(action, np.min(self.env.action_space.low[0]), np.max(self.env.action_space.high[0]))
-        action = action.cpu().data.numpy()
-
-        return action, log_prob, value
 
     def action_converter(self, action, position_record, action_record):
         boundary_x, boundary_y = self.env.boundary_x, self.env.boundary_y

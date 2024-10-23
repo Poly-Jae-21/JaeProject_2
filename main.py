@@ -1,10 +1,11 @@
 import os
-from model.train_v2 import train_v2
+from model.train_v2 import train_meta_worker
 from model.build import argument
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from utils.logger import configure_logger
 import torch.multiprocessing as mp
+
 def main(args):
     args = args
     path = f"runs/{args.name}"
@@ -18,9 +19,15 @@ def main(args):
         device = torch.device("cpu")
 
     mp.set_start_method('spawn', True)
-    model = Net().to(device)
-    model.share_memory()
-    train_v2(args, writer=writer)
+
+    processes = []
+    for rank in range(args.n_workers):
+        p = mp.Process(target=train_meta_worker, args=(rank, args, writer))
+        p.start()
+        processes.append(p)
+
+    for p in processes:
+        p.join()
 
 if __name__ == "__main__":
     config = argument()

@@ -11,6 +11,7 @@ from utils.logger import configure_logger
 def argument():
     parser = argparse.ArgumentParser(description="Using PPO for solving multiple cities planning for EVFCS placement problems")
     parser.add_argument('--name', default='logging', type=str)
+    parser.add_argument('--n_workers', default=4, type=int, help='number of workers (default: 4)')
     parser.add_argument('--batch_size', type=int, default=32, help='input batch size for training (default: 32)')
     parser.add_argument('--test-batch-size', type=int, default=1000, help='input batch size for testing (default: 1000)')
     parser.add_argument('--epochs', type=int, default=5000, help='number of epochs to train (default: 5000)')
