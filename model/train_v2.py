@@ -14,38 +14,31 @@ import gym.vector
 import torch.distributed as dist
 
 # Initialize the distributed process group
-def init_distributed(rank, world_size, master_addr='', master_port=''):
+def init_distributed(rank, world_size, master_addr='10.165.96.29', master_port='1000'):
     # Initialize the process group for distributed communication
     dist.init_process_group(
-        backend='nccl', # Use nccl for GPU communication
+        backend='nccl', # Use gloo for GPU & CPU communication
         init_method= f'tcp://{master_addr}:{master_port}',
         rank=rank, # unique rank for each process
         world_size=world_size # Total number of workers (across all machines)
     )
 
 # Training function for each worker
-def train_meta_worker(global_policy_net, rank, world_size, config):
+def train_meta_worker(global_policy_net, rank, world_size, args, env, writer: SummaryWriter = None):
     # Initialize distributed communication
     init_distributed(rank, world_size)
     os.environ['CUDA_VISIBLE_DEVICES'] = str(rank % torch.cuda.device_count())
-    env = gym.make('chicago-v1')
 
-    local_policy_nets = [PolicyNetwork(env.)]
+    # Create three local policy nets
+    local_policy_nets = [PolicyNetwork(env.observation_space.shape[0], env.action_space.shape[0]).to(f'cuda:{rank % torch.cuda.device_count()}') for _ in range(args.n_local)]
 
-def train_meta_worker(rank, args, writer: SummaryWriter = None):
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(rank % torch.cuda.device_count())
+    #Meta-Learning with global and local policy nets
+    meta_ppo = MetaPPO(global_policy_net, local_policy_nets, env, args, batch_size=args.batch_size)
 
-    # Create one common environment for whole workers
-    env = gym.make('chicago-v1')
+    for meta_steps in range(args.epochs):
+        for i in range(args.n_local):
+            local_policy_net = meta_ppo.local_policy_nets[i]
+            meta_ppo.meta_train(env, meta_steps=args.n_local, inner_steps=1, timesteps=args.max_steps)
 
-    # Create policy and meta-Learning PPO
-    obs_space =env.observation_space.shape[0]
-    action_space = env.action_space.shape[0]
-    policy_net = PolicyNetwork(obs_space, action_space).to(f'cuda:{rank % torch.cuda.device_count()}')
-    meta_ppo = MetaPPO(policy_net, env, args, batch_size=args.batch_size)
 
-    # Meta-training loop
-    meta_ppo.meta_train(env, meta_steps=3, inner_steps=1, timesteps=args.epochs)
 
-    # Save model
-    torch.save(meta_ppo.policy_net.state_dict(), f'meta_ppo_worker_{rank}'))

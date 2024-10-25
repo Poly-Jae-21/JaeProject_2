@@ -12,6 +12,7 @@ def argument():
     parser = argparse.ArgumentParser(description="Using PPO for solving multiple cities planning for EVFCS placement problems")
     parser.add_argument('--name', default='logging', type=str)
     parser.add_argument('--n_workers', default=4, type=int, help='number of workers (default: 4)')
+    parser.add_argument('--n_local', type=int, default=3, help='how many local models to use (default: 3)')
     parser.add_argument('--batch_size', type=int, default=32, help='input batch size for training (default: 32)')
     parser.add_argument('--test-batch-size', type=int, default=1000, help='input batch size for testing (default: 1000)')
     parser.add_argument('--epochs', type=int, default=5000, help='number of epochs to train (default: 5000)')
@@ -24,11 +25,11 @@ def argument():
     parser.add_argument('--momentum', type=float, default=0.9, help='SGD momentum (default: 0.9)')
     parser.add_argument('--seed', type=int, default=1, help='random seed (default: 1)')
     parser.add_argument('--log-interval', type=int, default=10, help='how many batches to wait before logging training status')
-    parser.add_argument('--num-processes', type=int, default=3, help='how many training processes to use (default: 3)')
     parser.add_argument('--cuda', action='store_true', default=False, help='enables CUDA training')
     parser.add_argument('mps', action='store_true', default=False, help='enables MPS training on appleslicon MAC')
     parser.add_argument('--save_model', action='store_true', default=False, help='enables saving model to state_dict')
     parser.add_argument('--dry_run', action='store_true', default=False, help='quickly check a single pass')
+    parser.add_argument('--path', type=str, default='out/result/model', help='path to save checkpoints')
 
     args = parser.parse_args()
 
