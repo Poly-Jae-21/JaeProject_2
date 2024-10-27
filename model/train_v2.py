@@ -24,7 +24,8 @@ def init_distributed(rank, world_size, master_addr='10.165.96.29', master_port='
     )
 
 # Training function for each worker
-def train_meta_worker(global_policy_net, rank, world_size, args, env, writer: SummaryWriter = None):
+def train_meta_worker(meta_global_policy_net, global_global_policy_net, rank, world_size, args, env):
+
     # Initialize distributed communication
     init_distributed(rank, world_size)
     os.environ['CUDA_VISIBLE_DEVICES'] = str(rank % torch.cuda.device_count())
@@ -33,12 +34,18 @@ def train_meta_worker(global_policy_net, rank, world_size, args, env, writer: Su
     local_policy_nets = [PolicyNetwork(env.observation_space.shape[0], env.action_space.shape[0]).to(f'cuda:{rank % torch.cuda.device_count()}') for _ in range(args.n_local)]
 
     #Meta-Learning with global and local policy nets
-    meta_ppo = MetaPPO(global_policy_net, local_policy_nets, env, args, batch_size=args.batch_size)
+    meta_ppo = MetaPPO(meta_global_policy_net, local_policy_nets, env, args, batch_size=args.batch_size)
 
-    for meta_steps in range(args.epochs):
+    for episode in range(args.episodes):
         for i in range(args.n_local):
             local_policy_net = meta_ppo.local_policy_nets[i]
-            meta_ppo.meta_train(env, meta_steps=args.n_local, inner_steps=1, timesteps=args.max_steps)
+            meta_ppo.adapt_to_task(local_policy_net, env, inner_steps=1, timesteps=args.max_steps)
+
+        meta_ppo.aggregat_local_to_meta_global()
+
+        meta_ppo.reduce_and_broadcast(global_global_policy_net)
+
+        print(f"Worker {rank}: Completed Episode {episode}")
 
 
 

@@ -11,30 +11,21 @@ import gym
 
 
 
-def main(args):
-    args = args
-    path = f"runs/{args.name}"
-    configure_logger(args.name, path)
-    writer = SummaryWriter(os.path.join(args.path, "tb"))
-
-    use_cuda = args.cuda and torch.cuda.is_available()
-    if use_cuda:
-        device = torch.device("cuda")
-    else:
-        device = torch.device("cpu")
-
+def main():
     mp.set_start_method('spawn', True)
 
     # Create one common environment for whole workers
     env = gym.make('chicago-v1')
 
     # Global shared policy network
-    global_policy_net = PolicyNetwork(env.observation_space.shape[0], env.action_space.shape[0]).to(device)
+    global_global_policy_net = PolicyNetwork(env.observation_space.shape[0], env.action_space.shape[0])
 
-    world_size = args.n_workers
+    meta_global_policy_net = PolicyNetwork(env.observation_space.shape[0], env.action_space.shape[0])
+
+    world_size = 4
     processes = []
-    for rank in range(args.n_workers):
-        p = mp.Process(target=train_meta_worker, args=(global_policy_net, rank, world_size, args, env, writer))
+    for rank in range(world_size):
+        p = mp.Process(target=train_meta_worker, args=(meta_global_policy_net, global_global_policy_net, rank, world_size, env))
         p.start()
         processes.append(p)
 
@@ -42,8 +33,7 @@ def main(args):
         p.join()
 
     # Save the final global policy after meta-training
-    torch.save(global_policy_net.state_dict(), args.path, "global_policy_net.pt")
+    torch.save(global_global_policy_net.state_dict(), 'out/result/model', "global_global_policy_net.pt")
 
 if __name__ == "__main__":
-    config = argument()
-    main(config)
+    main()

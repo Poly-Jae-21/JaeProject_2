@@ -15,7 +15,7 @@ def argument():
     parser.add_argument('--n_local', type=int, default=3, help='how many local models to use (default: 3)')
     parser.add_argument('--batch_size', type=int, default=32, help='input batch size for training (default: 32)')
     parser.add_argument('--test-batch-size', type=int, default=1000, help='input batch size for testing (default: 1000)')
-    parser.add_argument('--epochs', type=int, default=5000, help='number of epochs to train (default: 5000)')
+    parser.add_argument('--episodes', type=int, default=5000, help='number of epochs to train (default: 5000)')
     parser.add_argument('--max_steps', type=int, default=100, help='maximum number of steps (default: 100)')
     parser.add_argument('--gamma', type=float, default=0.95, help='discount factor (default: 0.95)')
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate (default: 1e-4)')

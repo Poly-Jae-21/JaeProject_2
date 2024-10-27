@@ -157,9 +157,9 @@ class MetaPPO(PPO):
             adapted_policies.append(adapted_policy)
 
         # Meta-updates: aggregate parameters from all local models to update the global model
-        self.aggregate_parameters(adapted_policies)
+        self.aggregat_local_to_meta_global(adapted_policies)
 
-    def aggregate_parameters(self, adapted_policies):
+    def aggregat_local_to_meta_global(self, adapted_policies):
         """
         Aggregate parameters from local learners to update the global meta-learner using weighted MAML.
         """
@@ -186,6 +186,11 @@ class MetaPPO(PPO):
         # Broadcast the updated global model to all workers
         for param in self.global_policy_net.parameters():
             dist.broadcast(param.data, src=0) # Assume rank 0 is the parameter server(main worker)
+
+    def reduce_and_broadcast(self, adapted_global_policies):
+
+        global_params = OrderedDict(self.global_policy_net.named_parameters())
+
 
     def rollout(self, policy_net, env, factors, timesteps):
         """
