@@ -36,10 +36,12 @@ def train_meta_worker(meta_global_policy_net, global_global_policy_net, rank, wo
     #Meta-Learning with global and local policy nets
     meta_ppo = MetaPPO(meta_global_policy_net, local_policy_nets, env, args, batch_size=args.batch_size)
 
+    factors = ["environment", "economic", "urbanity"]
+
     for episode in range(args.episodes):
         for i in range(args.n_local):
             local_policy_net = meta_ppo.local_policy_nets[i]
-            meta_ppo.adapt_to_task(local_policy_net, env, inner_steps=1, timesteps=args.max_steps)
+            meta_ppo.adapt_to_task(local_policy_net, env, factors[i], inner_steps=args.inner_steps, timesteps=args.max_steps)
 
         meta_ppo.aggregat_local_to_meta_global()
 

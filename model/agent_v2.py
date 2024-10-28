@@ -38,7 +38,7 @@ class PPO:
         self.clip_epsilon = config.clip_epsilon # = 0.2
         self.value_coeff = config.value_coeff # = 0.5
         self.entropy_coeff = config.entropy_coeff #0.01
-        self.max_steps = config.max_steps
+        self.inner_steps = config.inner_steps
         self.batch_size = config.batch_size
         self.device = config.device
 
@@ -76,7 +76,7 @@ class PPO:
         dataset_size = states.size(0)
         batch_iter = int(math.ceil(dataset_size / self.batch_size))
 
-        for _ in range(self.max_steps):
+        for _ in range(self.inner_steps):
             perm = np.arange(states.shape[0])
             np.random.shuffle(perm)
             perm = torch.LongTensor(perm)
@@ -112,10 +112,10 @@ class PPO:
                 self.optimizer.step()
 
 class MetaPPO(PPO):
-    def __init__(self, global_policy_net, local_policy_nets, env, config, batch_size):
+    def __init__(self, meta_global_policy_net, local_policy_nets, env, config, batch_size):
         self.env = env
         self.config = config
-        self.global_policy_net = global_policy_net
+        self.meta_global_policy_net = meta_global_policy_net
         self.local_policy_nets = local_policy_nets
         self.lr = self.config.lr
         self.gamma = self.config.gamma
@@ -123,9 +123,10 @@ class MetaPPO(PPO):
         self.value_coeff = self.config.value_coeff
         self.entropy_coeff = self.config.entropy_coeff
         self.batch_size = batch_size
+        self.lam = self.config.lambda_
 
 
-    def adapt_to_task(self, local_policy_net, env, factors, inner_steps=1, timesteps = 100):
+    def adapt_to_task(self, local_policy_net, env, factors, inner_steps=10, timesteps = 100):
         """
         Perform inner-loop adaptation on a specific criteria from three criteria (e.g., environment, economic, urbanity) using a local learner.
 
@@ -134,8 +135,8 @@ class MetaPPO(PPO):
         ppo = PPO(self.config, local_policy_net)
 
         # Gather experience and train on the task
-        trajectories, old_log_probs, rewards, values, dones = self.rollout(local_policy_net, env, factors, timesteps)
-        returns = self.compute_gae(rewards, values, dones, values[-1], self.gamma)
+        trajectories, old_log_probs, rewards, values, dones = self.rollout(local_policy_net, env, ppo, factors, timesteps)
+        returns = ppo.compute_gae(rewards, values, dones, values[-1], self.gamma, self.lam)
         advantages = np.array(returns) - np.array(values)
 
         for _ in range(inner_steps):
@@ -143,56 +144,54 @@ class MetaPPO(PPO):
 
         return local_policy_net
 
-    def meta_train(self, env, meta_steps=3, inner_steps=1, timesteps=100):
-        """
-        Meta-training loop over three local policies. Aggregate gradients local learners into the global model
-
-        """
-        adapted_policies = []
-        for i in range(meta_steps):
-            # meta steps = number of factors = environment, economic, and urbanity
-            criteria = ['environment', 'economic', 'urbanity']
-            local_policy_net = self.local_policy_nets[i]
-            adapted_policy = self.adapt_to_task(local_policy_net, env, criteria[i], inner_steps, timesteps)
-            adapted_policies.append(adapted_policy)
-
-        # Meta-updates: aggregate parameters from all local models to update the global model
-        self.aggregat_local_to_meta_global(adapted_policies)
-
-    def aggregat_local_to_meta_global(self, adapted_policies):
+    def aggregat_local_to_meta_global(self):
         """
         Aggregate parameters from local learners to update the global meta-learner using weighted MAML.
         """
         # Initialize parameter aggregation
-        global_params = OrderedDict(self.global_policy_net.named_parameters())
+        global_params = OrderedDict(self.meta_global_policy_net.named_parameters())
         for name, param in global_params.items():
             param.data.copy_(torch.zeros_like(param.data))
 
         # Aggregate parameters from local adapted policies
-        for adapted_policy in adapted_policies:
-            local_params = adapted_policy.named_parameters()
-            for (name, param), (_, adapted_param) in zip(global_params.items(), local_params):
-                param.data += adapted_param.data
+        for local_policy in self.local_policy_nets:
+            local_params = local_policy.named_parameters()
+            for (name, param), (_, local_param) in zip(global_params.items(), local_params):
+                param.data += local_param.data
 
         # Normalize aggregated parameters by the number of local networks
         for name, param in global_params.items():
-            param.data /= len(adapted_policies)
+            param.data /= len(self.local_policy_nets)
 
-        # Now synchronize the parameters across all workers
-        for param in self.global_policy_net.parameters():
-            dist.all_reduce(param.data, op=dist.ReduceOp.SUM)
+        self.meta_global_policy_net.load_state_dict(global_params)
+
+    def reduce_and_broadcast(self, global_of_global_policy):
+        """
+        Share parameters between meta-global policy nets from all workers and update the global_of_global policy through reduce and broadcast collective communications in Pytorch.
+        In more detail, each meta-global policy net's parameters is aggregated to global_of_global policy net by averaging those parameters from all workers through the reduce technique.
+        Aggregated parameter in global_of_global policy net is broadcasted to all workers that all meta-global policy nets in workers gets all same parameters with global_of_global policy.
+        """
+
+        global_params = OrderedDict(self.meta_global_policy_net.named_parameters())
+        global_of_global_params = OrderedDict(global_of_global_policy.named_parameters())
+
+        # Initialize global_of_global with zeros
+        for name, param in global_params.items():
+            param.data.copy_(torch.zeros_like(param.data))
+
+        # Reduce meta_global_policy net across all workers into global_of_global policy
+        for name, param in global_params.items():
+            dist.reduce(param.data, op=dist.ReduceOp.SUM)
             param.data /= dist.get_world_size()
 
-        # Broadcast the updated global model to all workers
-        for param in self.global_policy_net.parameters():
-            dist.broadcast(param.data, src=0) # Assume rank 0 is the parameter server(main worker)
+        # Update global_of_global_policy with reduced parameters
+        global_of_global_policy.load_state_dict(global_params)
 
-    def reduce_and_broadcast(self, adapted_global_policies):
+        # Broadcast updated parameters to all workers' global policies
+        for param in global_of_global_policy.parameters():
+            dist.broadcast(param.data, src=0) # Broadcast from rank 0
 
-        global_params = OrderedDict(self.global_policy_net.named_parameters())
-
-
-    def rollout(self, policy_net, env, factors, timesteps):
+    def rollout(self, policy_net, env, ppo, factor, timesteps):
         """
         Rollout one time to collect data for each factor using the given policy network
         """
@@ -203,18 +202,22 @@ class MetaPPO(PPO):
         dones = []
         old_log_probs = []
         state = env.reset_free()
+        current_action = None
         for _ in range(timesteps):
-            action, log_prob = PPO.select_action(env, state)
-            converted_action = Action.action_converter(action)
-            next_state, reward, done, _ = env.step(converted_action, state, factors)
+            action, log_prob = ppo.select_action(env, state)
+
+            converted_action = Action.action_converter(current_action, action)
+
+            next_state, reward, done, _ = env.step(converted_action, state, factor)
             _, value = policy_net(torch.tensor(state), dtype=torch.float32)
             trajectories.append((state, action))
             rewards.append(reward)
             values.append(value)
             dones.append(done)
-            old_log_probs.append(log_prob)
+            old_log_probs.append(log_prob.item())
             if not done:
                 state = next_state
+                current_action = converted_action
 
         return trajectories, old_log_probs, rewards, values, dones
 

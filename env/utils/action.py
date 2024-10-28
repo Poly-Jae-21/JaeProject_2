@@ -12,6 +12,28 @@ class Action(object):
         self.observation = observation
         self.state = state
 
+    def local_action_converter(self, current_action, next_action):
+        """
+        In the update of local_policy_network, we do not need to record the positions and capacities.
+        Thus, this function just exports converted next action for MAP (Not partial observation) to utilize it on next step as current action.
+        Current action = converted action already for MAP
+        Next action = not-converted action yet for partial observation
+        MAP next action = converted action for MAP from next action
+        """
+        current_position = current_action[0][:-1]
+
+        MAP_next_action_x = (next_action[0][0] + 1) * 100 / 2 - 50
+        MAP_next_action_y = (next_action[0][1] + 1) * 100 / 2 - 50
+        MAP_next_action = np.array([-MAP_next_action_y, MAP_next_action_x])
+        MAP_next_position = (current_position + MAP_next_action).astype('int32')
+
+        original_next_capacity = (next_action[0][2] + 1) * (self.config.max_capacity - self.config.min_capacity) / 2 + self.config.min_capacity
+
+        MAP_next_action = np.concatenate(MAP_next_position, original_next_capacity) # MAP_next_action -> current_action in next step
+
+        return MAP_next_action
+
+
     def action_converter(self, action, position_record, action_record):
         boundary_x, boundary_y = self.env.boundary_x, self.env.boundary_y
         raw_action_x = (action[0][0] + 1) * 100 / 2 - 50
