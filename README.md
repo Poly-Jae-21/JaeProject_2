@@ -25,3 +25,7 @@ iv) parallel learning.
 ## i) Deep PPO RL
 Spatial decision making 
 
+## Configuration as Code (CAC)
+1. main.py <- gym.make.env 
+2. train_v2.py
+3. agent_v2.py
