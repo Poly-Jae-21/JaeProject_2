@@ -4,13 +4,9 @@ import torch.distributions as distributions
 
 
 class Action(object):
-    def __init__(self, config, env, actor, critic, observation, state):
+    def __init__(self, config, env):
         self.config = config
         self.env = env
-        self.actor = actor
-        self.critic = critic
-        self.observation = observation
-        self.state = state
 
     def local_action_converter(self, current_action, next_action):
         """
@@ -32,7 +28,6 @@ class Action(object):
         MAP_next_action = np.concatenate(MAP_next_position, original_next_capacity) # MAP_next_action -> current_action in next step
 
         return MAP_next_action
-
 
     def action_converter(self, action, position_record, action_record):
         boundary_x, boundary_y = self.env.boundary_x, self.env.boundary_y

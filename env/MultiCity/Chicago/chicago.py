@@ -111,6 +111,12 @@ class ChicagoEnv():
         
         obj1_2, will use it on storing and managing the locations of potential fast charging stations to define the distribution probability of starting locations
         
+        --- Updated MAP format (10/28/2024) ---
+        We create 2 types of MAP: i) main MAP for environment, and ii) sub MAP for record & visualization of output in the render mode.
+        
+        i) Main MAP
+        There are two 
+        
         """
         Matrix_x_size, Matrix_y_size = int(self.max_x - self.min_x), int(self.max_y - self.min_y)
         self.boundary_x, self.boundary_y = Matrix_x_size, Matrix_y_size

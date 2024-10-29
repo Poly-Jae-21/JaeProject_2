@@ -206,7 +206,7 @@ class MetaPPO(PPO):
         for _ in range(timesteps):
             action, log_prob = ppo.select_action(env, state)
 
-            converted_action = Action.action_converter(current_action, action)
+            converted_action = Action(self.config, env).local_action_converter(current_action, action)
 
             next_state, reward, done, _ = env.step(converted_action, state, factor)
             _, value = policy_net(torch.tensor(state), dtype=torch.float32)
