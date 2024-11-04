@@ -126,7 +126,7 @@ class MetaPPO(PPO):
         self.lam = self.config.lambda_
 
 
-    def adapt_to_task(self, local_policy_net, env, factors, inner_steps=10, timesteps = 100):
+    def adapt_to_task(self, local_policy_net, env, initial_observation, factors, inner_steps=10, timesteps = 100):
         """
         Perform inner-loop adaptation on a specific criteria from three criteria (e.g., environment, economic, urbanity) using a local learner.
 
@@ -135,7 +135,7 @@ class MetaPPO(PPO):
         ppo = PPO(self.config, local_policy_net)
 
         # Gather experience and train on the task
-        trajectories, old_log_probs, rewards, values, dones = self.rollout(local_policy_net, env, ppo, factors, timesteps)
+        trajectories, old_log_probs, rewards, values, dones = self.rollout(local_policy_net, env, initial_observation, ppo, factors, timesteps)
         returns = ppo.compute_gae(rewards, values, dones, values[-1], self.gamma, self.lam)
         advantages = np.array(returns) - np.array(values)
 
@@ -191,7 +191,7 @@ class MetaPPO(PPO):
         for param in global_of_global_policy.parameters():
             dist.broadcast(param.data, src=0) # Broadcast from rank 0
 
-    def rollout(self, policy_net, env, ppo, factor, timesteps):
+    def rollout(self, policy_net, env, initial_observation, ppo, factor, timesteps):
         """
         Rollout one time to collect data for each factor using the given policy network
         """
@@ -201,7 +201,7 @@ class MetaPPO(PPO):
         values = []
         dones = []
         old_log_probs = []
-        state = env.reset()
+        state = initial_observation
         for _ in range(timesteps):
             action, log_prob = ppo.select_action(env, state)
             next_state, reward, done, _ = env.step(action, state, factor)
