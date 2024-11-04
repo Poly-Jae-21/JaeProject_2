@@ -18,8 +18,6 @@ def argument():
     parser.add_argument('--episodes', type=int, default=5000, help='number of epochs to train (default: 5000)')
     parser.add_argument('--max_steps', type=int, default=100, help='maximum number of steps (default: 100)')
     parser.add_argument('--inner_steps', type=int, default=10, help='number of steps to train (default: 10)')
-    parser.add_argument('--max_capacity', type=int, default=30000, help='maximum capacity (default: 30000)')
-    parser.add_argument('--min_capacity', type=int, default=0, help='minimum capacity (default: 0)')
     parser.add_argument('--gamma', type=float, default=0.95, help='discount factor (default: 0.95)')
     parser.add_argument('--lambda_', type=float, default=0.95, help='lambda parameter (default: 0.95)')
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate (default: 1e-4)')

@@ -201,14 +201,10 @@ class MetaPPO(PPO):
         values = []
         dones = []
         old_log_probs = []
-        state = env.reset_free()
-        current_action = None
+        state = env.reset()
         for _ in range(timesteps):
             action, log_prob = ppo.select_action(env, state)
-
-            converted_action = Action(self.config, env).local_action_converter(current_action, action)
-
-            next_state, reward, done, _ = env.step(converted_action, state, factor)
+            next_state, reward, done, _ = env.step(action, state, factor)
             _, value = policy_net(torch.tensor(state), dtype=torch.float32)
             trajectories.append((state, action))
             rewards.append(reward)
@@ -217,7 +213,6 @@ class MetaPPO(PPO):
             old_log_probs.append(log_prob.item())
             if not done:
                 state = next_state
-                current_action = converted_action
 
         return trajectories, old_log_probs, rewards, values, dones
 
