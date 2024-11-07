@@ -7,7 +7,6 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.distributed as dist
 import numpy as np
-from env.utils.action import Action
 from torch.autograd import Variable
 from collections import OrderedDict
 # Basic PPO policy and value network
@@ -112,10 +111,9 @@ class PPO:
                 self.optimizer.step()
 
 class MetaPPO(PPO):
-    def __init__(self, meta_global_policy_net, local_policy_nets, env, config, batch_size):
+    def __init__(self, local_policy_nets, env, config, batch_size):
         self.env = env
         self.config = config
-        self.meta_global_policy_net = meta_global_policy_net
         self.local_policy_nets = local_policy_nets
         self.lr = self.config.lr
         self.gamma = self.config.gamma
@@ -144,12 +142,32 @@ class MetaPPO(PPO):
 
         return local_policy_net
 
-    def aggregat_local_to_meta_global(self):
+    def meta_adapt_to_task(self, meta_global_policy_net, env, initial_observation, factors=None, inner_steps=10, timesteps = 100):
+        """
+        Perform inner-loop adaptation on a specific criteria from three criteria (e.g., environment, economic, urbanity) using a local learner.
+
+        """
+
+        ppo = PPO(self.config, meta_global_policy_net)
+
+        # Gather experience and train on the task
+        trajectories, old_log_probs, rewards, values, dones = self.rollout(meta_global_policy_net, env, initial_observation, ppo, factors, timesteps)
+        returns = ppo.compute_gae(rewards, values, dones, values[-1], self.gamma, self.lam)
+        advantages = np.array(returns) - np.array(values)
+
+        for _ in range(inner_steps):
+            ppo.update(trajectories, old_log_probs, advantages, returns)
+
+        next_initial_position, next_initial_observation = env.reset()
+
+        return meta_global_policy_net, returns, next_initial_position, next_initial_observation
+
+    def aggregat_local_to_meta_global(self, meta_global_policy_net):
         """
         Aggregate parameters from local learners to update the global meta-learner using weighted MAML.
         """
         # Initialize parameter aggregation
-        global_params = OrderedDict(self.meta_global_policy_net.named_parameters())
+        global_params = OrderedDict(meta_global_policy_net.named_parameters())
         for name, param in global_params.items():
             param.data.copy_(torch.zeros_like(param.data))
 
@@ -163,16 +181,16 @@ class MetaPPO(PPO):
         for name, param in global_params.items():
             param.data /= len(self.local_policy_nets)
 
-        self.meta_global_policy_net.load_state_dict(global_params)
+        return meta_global_policy_net.load_state_dict(global_params)
 
-    def reduce_and_broadcast(self, global_of_global_policy):
+    def reduce_and_broadcast(self, meta_global_policy_net, global_of_global_policy):
         """
         Share parameters between meta-global policy nets from all workers and update the global_of_global policy through reduce and broadcast collective communications in Pytorch.
         In more detail, each meta-global policy net's parameters is aggregated to global_of_global policy net by averaging those parameters from all workers through the reduce technique.
         Aggregated parameter in global_of_global policy net is broadcasted to all workers that all meta-global policy nets in workers gets all same parameters with global_of_global policy.
         """
 
-        global_params = OrderedDict(self.meta_global_policy_net.named_parameters())
+        global_params = OrderedDict(meta_global_policy_net.named_parameters())
         global_of_global_params = OrderedDict(global_of_global_policy.named_parameters())
 
         # Initialize global_of_global with zeros
