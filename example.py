@@ -187,7 +187,7 @@ def plot_rewards(individual_rewards, average_rewards, global_rewards, episode):
 
 def train_meta_worker(meta_global_policy_nets, global_of_global_policy_net, device, rank, size):
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-    os.environ['MASTER_ADDR'] = 'fe80::5af6:2525:196e:5f43%16'
+    os.environ['MASTER_ADDR'] = 'fe80::5af6:2525:196e:5f43%17'
     os.environ['MASTER_PORT'] = '9999'
     dist.init_process_group('gloo', init_method="env://?use_libuv=False", rank=rank, world_size=size)
 

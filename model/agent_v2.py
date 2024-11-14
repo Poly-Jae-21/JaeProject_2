@@ -10,6 +10,7 @@ import numpy as np
 from torch.autograd import Variable
 from collections import OrderedDict
 # Basic PPO policy and value network
+import matplotlib.pyplot as plt
 class PolicyNetwork(nn.Module):
     def __init__(self, obs_space, action_space):
         super(PolicyNetwork, self).__init__()
@@ -45,15 +46,14 @@ class PPO:
 
         device = self.device
 
-        state = Variable(torch.Tensor(state))
+        state = torch.Tensor(state, dtype=torch.float32).to(device)
         action_mean, value = self.policy_net(state)
-        action_dist = torch.distributions.Normal(action_mean, 1.0)
-        action = action_dist.sample()
-        action = torch.clamp(action, np.min(env.action_space.low[0], np.max(env.action_space.high[0])))
-        log_prob = action_dist.log_prob(action)
-        action = action.data.numpy()
 
-        return action, log_prob, value
+        action_prob = nn.functional.softmax(action_mean, dim=-1)
+        action_dist = torch.distributions.Categorical(action_prob)
+        action = action_dist.sample()
+        log_prob_action = action_dist.log_prob(action)
+        return action.cpu().detach(), log_prob_action, value.cpu().detach()
 
     def compute_gae(self, rewards, values, dones, next_value, gamma, lam=0.95):
         gae = 0
@@ -66,7 +66,7 @@ class PPO:
         return returns
 
     def update(self, trajectories, old_log_probs, advantages, returns):
-        states = torch.tensor(np.vstack([t[0] for t in trajectories]), dtype=torch.float32)
+        states = torch.tensor(np.vstack([t[0] for t in trajectories]), dtype=torch.float32).to(self.device)
         actions = torch.tensor(np.vstack([t[1] for t in trajectories]), dtype=torch.float32)
         log_probs = torch.tensor(old_log_probs, dtype=torch.float32)
         advantages = torch.tensor(advantages, dtype=torch.float32)
@@ -86,8 +86,10 @@ class PPO:
                 batch_states, batch_actions, batch_advantages, batch_returns, batch_log_probs = states[ind], actions[ind], advantages[ind], returns[ind], log_probs[ind]
 
                 new_action_mean, new_value = self.policy_net(batch_states)
-                action_dist = torch.distributions.Normal(new_action_mean, 1.0)
-                new_log_probs = action_dist.log_prob(actions).sum(dim=-1)
+                new_value = new_value.cpu().detach()
+                action_prob = nn.functional.softmax(new_action_mean, dim=-1)
+                action_dist = torch.distributions.Categorical(action_prob)
+                new_log_probs = action_dist.log_prob(batch_actions.to(self.device)).cpu().detach()
 
                 ratio = torch.exp(new_log_probs - batch_log_probs)
 
@@ -219,19 +221,33 @@ class MetaPPO(PPO):
         values = []
         dones = []
         old_log_probs = []
+        infos = {}
+        total_reward = 0
         state = initial_observation
         for _ in range(timesteps):
             action, log_prob = ppo.select_action(env, state)
-            next_state, reward, done, _ = env.step(action, state, factor)
+            next_state, reward, done, info = env.step(action.item(), state, factor)
             _, value = policy_net(torch.tensor(state), dtype=torch.float32)
             trajectories.append((state, action))
             rewards.append(reward)
-            values.append(value)
+            values.append(value.item())
             dones.append(done)
             old_log_probs.append(log_prob.item())
+            total_reward += reward
+            infos.update(info)
             if not done:
                 state = next_state
 
-        return trajectories, old_log_probs, rewards, values, dones
+        return trajectories, old_log_probs, rewards, values, dones, total_reward, infos
 
-
+    def plot(self, individual_rewards, average_rewards, global_rewards, episode):
+        plt.figure()
+        for i in range(3):
+            plt.plot(individual_rewards[i], label=f'worker {i + 1}')
+        plt.plot(average_rewards, label='Average reward of meta policies', color='red', linestyle='--')
+        plt.plot(global_rewards, label='Global reward', color='purple', linestyle='--')
+        plt.title(f'Rewards up to episode {episode}')
+        plt.xlabel('Episode')
+        plt.ylabel('Total Reward')
+        plt.legend()
+        plt.show()
