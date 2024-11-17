@@ -47,10 +47,6 @@ class PPO:
         log_prob_action = action_dist.log_prob(action)
         return action.cpu().detach(), log_prob_action
 
-        #action_dist = torch.distributions.Normal(action_mean, 1.0)
-        #action = action_dist.sample().item()
-        #return action.cpu().detach().numpy(), action_dist.log_prob(action_mean[action].item())
-
     def compute_gae(self, rewards, values, dones, next_value, gamma, lam=0.95):
         gae = 0
         returns = []
@@ -244,5 +240,4 @@ if __name__ == '__main__':
 
     for p in processes:
         p.join()
-
     torch.save(global_of_global_policy_net.state_dict(), f'global_of_global_policy_net.pt')

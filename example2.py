@@ -1,3 +1,3 @@
 import gymnasium as gym
-
-env = gym.make('UrbanEnvChicago-v1')
+import gymnasium_env_jae
+env = gym.make("gymnasium_env_jae/UrbanEnvChicago-v1")
