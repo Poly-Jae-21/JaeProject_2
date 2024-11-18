@@ -1,2 +1,6 @@
 import gymnasium as gym
-env = gym.make("gymnasium_env_jae/UrbanEnvChicago-v1")
+
+gym.register('UrbanEnvChicago-v1', entry_point='template.env_name.envs.multi_policies:ChicagoMultiPolicyMap')
+env = gym.make("UrbanEnvChicago-v1")
+
+

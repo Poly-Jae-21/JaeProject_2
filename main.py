@@ -27,8 +27,9 @@ def main():
     ]
     world_size = 3
     processes = []
+    args = argument()
     for rank in range(world_size):
-        p = mp.Process(target=train_meta_worker, args=(meta_global_policy_net, global_global_policy_net, device, rank, world_size, env))
+        p = mp.Process(target=train_meta_worker, args=(meta_global_policy_net, global_global_policy_net, device, rank, world_size, args, env))
         p.start()
         processes.append(p)
 

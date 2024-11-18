@@ -32,7 +32,7 @@ parser.add_argument('--tb', action='store_true', help='use Tensorboard?')
 parser.add_argument('--log_folder', default='./logs', help='location to save logs')
 parser.add_argument('--mode', default='train', help='choose train or test')
 parser.add_argument('--restore', action='store_true', help='restore and continue training?')
-parser.add_argument('--mode_', default='test', help='choose train or test')
+parser.add_argument('--test', action='store_true', help='choose train or test')
 
 parser.add_argument('--size', type=int, default=3, help='size of workers')
 

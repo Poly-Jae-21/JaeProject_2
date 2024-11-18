@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 class PolicyNetwork(nn.Module):
     def __init__(self, obs_space, action_space):
         super(PolicyNetwork, self).__init__()
+
         self.fc1 = nn.Linear(obs_space, 256)
         self.fc2 = nn.Linear(256, 128)
         self.fc3 = nn.Linear(128, 64)

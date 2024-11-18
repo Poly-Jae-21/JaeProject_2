@@ -24,7 +24,7 @@ def init_distributed(rank, world_size, master_addr='fe80::5af6:2525:196e:5f43%1'
     dist.init_process_group('gloo', init_method="env://?use_libuv=False", rank=rank, world_size=world_size)
 
 # Training function for each worker
-def train_meta_worker(meta_global_policy_nets, global_global_policy_net, device, rank, world_size, args, env):
+def train_meta_worker(global_policy_nets, local_policy_nets, device, rank, world_size, args, env):
 
     # Initialize distributed communication
     init_distributed(rank, world_size)
