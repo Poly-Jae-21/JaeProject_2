@@ -22,10 +22,9 @@ class train():
         average_rewards_log = []
 
         factor = ["environment", "economic", "urbanity"]
-
+        meta_ppo = MetaPPO(device, env, args, batch_size=args.batch_size)
         for episode in range(args.max_episodes):
             for rank in range(3):
-                meta_ppo = MetaPPO(global_policy_net, local_policy_net[rank], device, env, args, batch_size=args.batch_size)
                 if rank == 0:
                     self.initial_observation, _  = env.reset()
                     meta_ppo.local_policy_nets[rank] = meta_ppo.adapt_to_task(args, local_policy_net[rank], env, self.initial_observation, factor[rank])
@@ -36,13 +35,14 @@ class train():
                     meta_ppo.local_policy_nets[rank] = meta_ppo.adapt_to_task(args, local_policy_net[rank], env, self.initial_observation, factor[rank])
 
                     meta_ppo.aggregate_local_to_global(episode, global_policy_net)
-                    global_policy_net, reward, next_initial_position, next_initial_observation, step_done = meta_ppo.adapt_to_task(global_policy_net, env, self.initial_observation, factor=None, inner_steps=args.update_timesteps, timesteps=args.max_timesteps)
-                    reward_log.append(reward)
-                    average_rewards_log.append(reward / (step_done + 1))
-                    print("Train Episode {} | meta total rewards: {}, meta average reward: {}".format(episode, reward_log[-1], average_rewards_log[-1]))
+                    total_global_reward, global_timesteps, infos = meta_ppo.global_evaluate(global_policy_net, env, self.initial_observation, factor=None, timesteps=args.max_timesteps)
+                    reward_log.append(total_global_reward)
+                    average_rewards_log.append((total_global_reward / global_timesteps))
+                    print("Train Episode {} | each reward: {}, meta total rewards: {}, meta average reward: {}".format(episode, infos, reward_log[-1], average_rewards_log[-1]))
 
                     if episode % args.print_interval == 0:
-                        meta_ppo.plot(reward_log, average_rewards_log, episode)
+                        #meta_ppo.plot(reward_log, average_rewards_log, episode)
+                        print("10x")
 
             if self.terminate:
                 torch.save(global_policy_net.state_dict(), args.ckpt_folder + '/PPO_{}_result_episode{}.pth'.format(args.env_name, episode))

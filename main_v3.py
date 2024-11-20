@@ -13,7 +13,6 @@ gym.register('UrbanEnvChicago-v1', entry_point='template.env_name.envs.multi_pol
 
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    mp.set_start_method('spawn')
 
     # Create one common environment for whole workers
     env = gym.make('UrbanEnvChicago-v1', render_mode='human')

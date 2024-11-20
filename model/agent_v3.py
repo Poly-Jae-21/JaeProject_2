@@ -57,6 +57,8 @@ class PPO:
         self.batch_size = args.batch_size
         self.device = device
 
+        self.buffer = RolloutBuffer()
+
     def select_action(self, state):
 
         state = np.reshape(state, [1, 10000])
@@ -66,9 +68,20 @@ class PPO:
         sampled_actions = dist_.sample()
         log_probs = dist_.log_prob(sampled_actions)
 
-        return sampled_actions.cpu().detach(), log_probs.cpu().detach(), value.cpu().detach()
+        self.buffer.states.append(state)
+        self.buffer.actions.append(sampled_actions.cpu().detach())
+        self.buffer.logprobs.append(log_probs.cpu().detach().sum(dim=-1))
+        self.buffer.values.append(value.cpu().detach())
 
-    def compute_gae(self, rewards, values, dones, next_value, gamma, lam=0.95):
+        return sampled_actions.cpu().detach()
+
+    def compute_gae(self, gamma, lam=0.95):
+
+        rewards = self.buffer.rewards
+        values = self.buffer.values
+        dones = self.buffer.dones
+        next_value = values[-1]
+
         gae = 0
         returns = []
         for i in reversed(range(len(rewards))):
@@ -76,35 +89,53 @@ class PPO:
             gae = delta + gamma * lam * gae * (1 - dones[i])
             returns.insert(0, gae + values[i])
             next_value = values[i]
+
         return returns
 
-    def update(self, trajectories, old_log_probs, advantages, returns):
-        states = torch.tensor(np.vstack([t[0] for t in trajectories])).to(self.device)
-        actions = torch.tensor(np.vstack([t[1] for t in trajectories]))
-        log_probs = torch.tensor(old_log_probs)
-        advantages = torch.tensor(advantages)
-        returns = torch.tensor(returns)
+    def update(self, returns):
 
-        dataset_size = states.size(0)
+        old_states = torch.stack(self.buffer.states, dim=0).to(self.device)
+        old_actions = torch.stack(self.buffer.actions, dim=0).to(self.device)
+        old_log_probs = torch.stack(self.buffer.logprobs, dim=0).to(self.device)
+        old_values = torch.stack(self.buffer.values, dim=0).to(self.device)
+
+        returns = torch.tensor(returns, dtype=torch.float32).to(self.device)
+
+        advantages = returns.detach() - old_values.detach()
+
+        dataset_size = old_states.size(0)
         batch_iter = int(math.ceil(dataset_size / self.batch_size))
 
         for _ in range(self.inner_steps):
-            perm = np.arange(states.shape[0])
-            np.random.shuffle(perm)
-            perm = torch.LongTensor(perm)
 
-            states, actions, returns, advantages, log_probs = states[perm].clone(), actions[perm].clone(), returns[perm].clone(), advantages[perm].clone(), log_probs[perm].clone()
+            perm = torch.randperm(dataset_size).to(self.device)
+            shuffled_states = old_states.index_select(0, perm)
+            shuffled_actions = old_actions.index_select(0, perm)
+            shuffled_log_probs = old_log_probs.index_select(0, perm)
+            shuffled_returns = returns.index_select(0, perm)
+            shuffled_advantages = advantages.index_select(0, perm)
+
             for i in range(batch_iter):
-                ind = slice(i * self.batch_size, min((i+1) * self.batch_size, states.shape[0]))
-                batch_states, batch_actions, batch_advantages, batch_returns, batch_log_probs = states[ind], actions[ind], advantages[ind], returns[ind], log_probs[ind]
+                start_idx = i * self.batch_size
+                end_idx = min((i+1)*self.batch_size, dataset_size)
+                batch_indices = slice(start_idx, end_idx)
 
-                new_action_mean, new_action_stddev, new_value = self.local_policy_net(batch_states)
+                batch_old_states = shuffled_states[batch_indices]
+                batch_old_actions = shuffled_actions[batch_indices]
+                batch_advantages = shuffled_advantages[batch_indices]
+                batch_returns = shuffled_returns[batch_indices]
+                batch_old_log_probs = shuffled_log_probs[batch_indices]
+
+                new_action_mean, new_action_stddev, new_value = self.local_policy_net(batch_old_states)
+
+                new_value = new_value.squeeze()
 
                 dist = torch.distributions.Normal(new_action_mean, new_action_stddev)
                 sampled_actions = dist.sample()
-                new_log_probs = dist.log_prob(sampled_actions).item()
+                new_log_probs = dist.log_prob(sampled_actions).sum(dim=-1)
+                entropy = dist.entropy().mean()
 
-                ratio = torch.exp(new_log_probs - batch_log_probs)
+                ratio = torch.exp(new_log_probs - batch_old_log_probs)
 
                 # Policy loss
                 surrogate_1 = ratio * batch_advantages
@@ -112,10 +143,10 @@ class PPO:
                 policy_loss = -torch.min(surrogate_1, surrogate_2).mean()
 
                 # Value loss
-                value_loss = self.value_coeff * nn.MSELoss()(returns, new_value).mean()
+                value_loss = self.value_coeff * nn.MSELoss()(batch_returns, new_value)
 
                 # Entropy loss for exploration
-                entropy_loss = -self.entropy_coeff * dist.entropy().mean()
+                entropy_loss = -self.entropy_coeff * entropy
 
                 # Total loss
                 loss = policy_loss + value_loss + entropy_loss
@@ -125,11 +156,13 @@ class PPO:
                 loss.backward()
                 self.optimizer.step()
 
+        self.buffer.clear()
+
 class MetaPPO(PPO):
-    def __init__(self, global_policy_net, local_policy_net, device, env, args, batch_size=32):
+    def __init__(self, device, env, args, batch_size=32):
         self.env = env
         self.args = args
-        self.local_policy_net = local_policy_net
+
         self.lr = args.lr
         self.gamma = args.gamma
         self.clip_epsilon = args.clip_epsilon
@@ -143,20 +176,26 @@ class MetaPPO(PPO):
         self.local_policy_nets = [[] for _ in range(3)]
 
     def adapt_to_task(self, args, local_policy_net, env, initial_observation, factor):
-        inner_steps = args.update_timesteps
+
         timesteps = args.max_timesteps
 
 
         ppo = PPO(args, self.device, local_policy_net)
 
-        trajectories, old_log_probs, rewards, values, dones = self.rollout(local_policy_net, env, initial_observation, ppo, factor, timesteps)
-        returns = ppo.compute_gae(rewards, values, dones, values[-1], self.gamma, self.lam)
-        advantages = np.array(returns) - np.array(values)
+        self.rollout(env, initial_observation, ppo, factor, timesteps)
 
-        for _ in range(inner_steps):
-            ppo.update(trajectories, old_log_probs, advantages, returns)
+        returns = ppo.compute_gae(self.gamma, self.lam)
+
+        ppo.update(returns)
 
         return local_policy_net
+
+    def global_evaluate(self, global_policy_net, env, initial_observation, factor=None, timesteps=100):
+        global_ppo = PPO(self.args, self.device, global_policy_net)
+
+        self.rollout(env, initial_observation, global_ppo, factor, timesteps)
+
+        return sum(global_ppo.buffer.rewards), sum(global_ppo.buffer.dones), global_ppo.buffer.infos
 
     def aggregate_local_to_global(self, episode, global_policy_net):
         global_params = OrderedDict(global_policy_net.named_parameters())
@@ -174,29 +213,22 @@ class MetaPPO(PPO):
 
         return global_policy_net.load_state_dict(global_params)
 
-    def rollout(self, local_policy_net, env, initial_observation, ppo, factor, timesteps):
-        trajectories = []
-        rewards = []
-        values = []
-        dones = []
-        old_log_probs = []
-        infos = {}
+    def rollout(self, env, initial_observation, ppo, factor, timesteps):
+
         state = initial_observation
+
         for _ in range(timesteps):
-            action, log_prob, value = ppo.select_action(state)
+            action = ppo.select_action(state)
             action_with_factor = (action.numpy().ravel(), factor)
             next_state, reward, done, terminate, info = env.step(action_with_factor)
             self.terminate = terminate
-            trajectories.append((state, action.numpy().ravel()))
-            rewards.append(reward)
-            values.append(value.item())
-            dones.append(done)
-            old_log_probs.append(log_prob.numpy().ravel())
-            infos.update(info)
+
+            ppo.buffer.rewards.append(reward)
+            ppo.buffer.dones.append(done)
+            ppo.buffer.infos.update(info)
+
             if not done:
                 state = next_state
-
-        return trajectories, old_log_probs, rewards, values, dones
 
     def plot(self, epi_rewards_list, average_rewards_list, episode):
         plt.figure()
@@ -210,6 +242,24 @@ class MetaPPO(PPO):
         plt.pause(1)
         plt.close()
 
+class RolloutBuffer:
+    def __init__(self):
+        self.states = []
+        self.actions = []
+        self.logprobs = []
+        self.values = []
+        self.dones = []
+        self.rewards = []
+        self.infos = {}
+
+    def clear(self):
+        del self.states[:]
+        del self.actions[:]
+        del self.logprobs[:]
+        del self.values[:]
+        del self.dones[:]
+        del self.rewards[:]
+        self.infos.clear()
 
 
 

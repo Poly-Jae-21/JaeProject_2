@@ -26,6 +26,10 @@ iv) parallel learning.
 Spatial decision making 
 
 ## Configuration as Code (CAC)
-1. main.py <- gym.make.env 
-2. train_v2.py
-3. agent_v2.py
+1. main_v3.py <- gym.make.env 
+2. train_v3.py
+3. agent_v3.py
+
+## Update Release (Nov 20, 2024)
+1. RuntimeError: Function 'MseLossBackward0' returned nan values in its 1th output.
+-> Need to normalize input 
