@@ -28,7 +28,8 @@ def main():
 
     world_size = 3
     args = argument()
-    train(global_policy_net, local_policy_nets, device, world_size, args, env)
+    train_ = train()
+    train_.train(global_policy_net, local_policy_nets, device, world_size, args, env)
 
     '''
         world_size = 3

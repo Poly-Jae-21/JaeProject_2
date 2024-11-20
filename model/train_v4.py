@@ -48,9 +48,3 @@ def train(args, env, state_dim, action_dim):
 
             if not done:
                 observation = next_observation
-
-
-
-
-
-def test(args, env, state_dim, action_dim):
