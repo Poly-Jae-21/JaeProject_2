@@ -23,10 +23,11 @@ class train():
 
         factor = ["environment", "economic", "urbanity"]
         meta_ppo = MetaPPO(device, env, args, batch_size=args.batch_size)
-        for episode in range(args.max_episodes+1):
+        for episode in range(args.max_episodes):
+            print("episode:" + str(episode+1) + "in train")
+            self.initial_observation, _ = env.reset()
             for rank in range(3):
                 if rank == 0:
-                    self.initial_observation, _  = env.reset()
                     meta_ppo.local_policy_nets[rank] = meta_ppo.adapt_to_task(args, local_policy_net[rank], env, self.initial_observation, factor[rank])
                 elif rank == 1:
                     meta_ppo.local_policy_nets[rank] = meta_ppo.adapt_to_task(args, local_policy_net[rank], env, self.initial_observation, factor[rank])
@@ -40,7 +41,7 @@ class train():
                     average_rewards_log.append((total_global_reward / global_timesteps))
                     print("Train Episode {} | each reward: {}, meta total rewards: {}, meta average reward: {}".format(episode, infos, reward_log[-1], average_rewards_log[-1]))
 
-                    if episode % args.print_interval == 0:
+                    if (episode+1) % args.print_interval == 0:
                         #meta_ppo.plot(reward_log, average_rewards_log, episode)
                         print("10x")
 

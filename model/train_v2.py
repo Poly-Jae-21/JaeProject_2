@@ -9,7 +9,6 @@ import torchopt
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 
-from example2 import rewards_log
 from model.agent_v2 import PolicyNetwork, MetaPPO
 
 import gym.vector
