@@ -1,3 +1,4 @@
-a = 25
+import numpy as np
 
-print(a % 10)
+for a in range(-10,10):
+    print(a)
