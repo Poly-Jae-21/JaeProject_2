@@ -23,7 +23,7 @@ class train():
 
         factor = ["environment", "economic", "urbanity"]
         meta_ppo = MetaPPO(device, env, args, batch_size=args.batch_size)
-        for episode in range(args.max_episodes):
+        for episode in range(args.max_episodes+1):
             for rank in range(3):
                 if rank == 0:
                     self.initial_observation, _  = env.reset()

@@ -61,7 +61,7 @@ class PPO:
 
     def select_action(self, state):
 
-        state = np.reshape(state, [1, 10201])
+        state = np.reshape(state, [1, 10000])
         state = torch.Tensor(state).to(self.device)
         actions_mean, actions_std, value = self.local_policy_net(state)
         dist_ = torch.distributions.Normal(actions_mean, actions_std)
@@ -222,7 +222,6 @@ class MetaPPO(PPO):
             action = ppo.select_action(state)
             action_with_factor = (action.numpy().ravel(), factor)
             next_state, reward, done, terminate, info = env.step(action_with_factor)
-            print(_, next_state.shape, reward)
             self.terminate = terminate
 
             ppo.buffer.rewards.append(reward)
