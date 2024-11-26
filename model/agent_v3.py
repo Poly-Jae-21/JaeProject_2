@@ -60,7 +60,6 @@ class PPO:
         self.buffer = RolloutBuffer()
 
     def select_action(self, state):
-
         state = torch.Tensor(state).to(self.device)
         actions_mean, actions_std, value = self.local_policy_net(state)
         dist_ = torch.distributions.Normal(actions_mean, actions_std)
