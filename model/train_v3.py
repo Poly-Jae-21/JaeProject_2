@@ -1,16 +1,8 @@
 import os
 import torch
-from model.agent_v3 import PolicyNetwork, MetaPPO
+from model.agent_v3 import MetaPPO
 
 import torch.distributed as dist
-
-# Initialize the distributed process group
-def init_distributed(rank, world_size, master_addr='fe80::5af6:2525:196e:5f43%17', master_port='9999'):
-    os.environ['CUDA_VISIBLE_DEVICES'] = '0' # single GPU
-    ###os.environ['CUDA_VISIBLE_DEVICES'] ='0,2' # triple GPUs
-    os.environ['MASTER_ADDR'] = master_addr
-    os.environ['MASTER_PORT'] = master_port
-    dist.init_process_group('gloo', init_method="env://?use_libuv=False", rank=rank, world_size=world_size)
 
 class train():
     def __init__(self):

@@ -1,12 +1,7 @@
 import math
-import time
-
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
-import torch.distributed as dist
-import numpy as np
 import matplotlib.pyplot as plt
 
 from collections import OrderedDict
