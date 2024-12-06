@@ -16,26 +16,31 @@ class train():
         factor = ["environment", "economic", "urbanity"]
         meta_ppo = MetaPPO(device, env, args, batch_size=args.batch_size)
         for episode in range(args.max_episodes):
+            torch.cuda.empty_cache()
             print("episode:" + str(episode+1) + "in train")
             self.initial_observation, _ = env.reset(seed=None, options=episode)
             for rank in range(3):
                 if rank == 0:
-                    meta_ppo.local_policy_nets[rank] = meta_ppo.adapt_to_task(args, local_policy_net[rank], env, self.initial_observation, factor[rank])
+                    local_policy_net[rank] = meta_ppo.adapt_to_task(args, local_policy_net[rank], env, self.initial_observation, factor[rank])
+                    print("0")
                 elif rank == 1:
-                    meta_ppo.local_policy_nets[rank] = meta_ppo.adapt_to_task(args, local_policy_net[rank], env, self.initial_observation, factor[rank])
+                    local_policy_net[rank] = meta_ppo.adapt_to_task(args, local_policy_net[rank], env, self.initial_observation, factor[rank])
+                    print("1")
 
                 if rank == world_size -1:
-                    meta_ppo.local_policy_nets[rank] = meta_ppo.adapt_to_task(args, local_policy_net[rank], env, self.initial_observation, factor[rank])
+                    local_policy_net[rank] = meta_ppo.adapt_to_task(args, local_policy_net[rank], env, self.initial_observation, factor[rank])
+                    print("2")
 
-                    meta_ppo.aggregate_local_to_global(episode, global_policy_net)
-                    total_global_reward, global_timesteps, infos = meta_ppo.global_evaluate(global_policy_net, env, self.initial_observation, factor=None, timesteps=args.max_timesteps)
+                    global_policy_net = meta_ppo.aggregate_local_to_global(episode, local_policy_net, global_policy_net)
+                    print("3")
+                    total_global_reward, global_average_reward, global_infos = meta_ppo.global_evaluate(global_policy_net, env, self.initial_observation, factor=None, timesteps=args.max_timesteps)
                     reward_log.append(total_global_reward)
-                    average_rewards_log.append((total_global_reward / global_timesteps))
-                    print("Train Episode {} | each reward: {}, meta total rewards: {}, meta average reward: {}".format(episode, infos, reward_log[-1], average_rewards_log[-1]))
+                    average_rewards_log.append(global_average_reward)
+                    print("Train Episode {} | each reward: {}, meta total rewards: {}, meta average reward: {}".format(episode, global_infos, reward_log[-1], average_rewards_log[-1]))
 
                     if (episode+1) % args.print_interval == 0:
-                        #meta_ppo.plot(reward_log, average_rewards_log, episode)
-                        print("10x")
+                        meta_ppo.plot(reward_log, average_rewards_log, episode)
+                        print("x100")
 
             if self.terminate:
                 torch.save(global_policy_net.state_dict(), args.ckpt_folder + '/PPO_{}_result_episode{}.pth'.format(args.env_name, episode))

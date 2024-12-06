@@ -16,6 +16,7 @@ def argument():
     parser.add_argument('--ckpt_folder', default='./checkpoints', help='location to save checkpoint models')
     parser.add_argument('--tb', action='store_true', help='whether to save tensorboard logs')
     parser.add_argument('--log_folder', default='./logs', help='location to save tensorboard logs')
+    parser.add_argument('--reward_folder', default='out/result/reward', help='location to save reward logs')
     parser.add_argument('--restore', action='store_true', help='whether to restore checkpoint')
     parser.add_argument('--env_name', type=str, default='UrbanEnvChicago-v1')
 
@@ -26,7 +27,7 @@ def argument():
     parser.add_argument('--max_timesteps', type=int, default=100, help='maximum timesteps in one episode')
     parser.add_argument('--update_timesteps', type=int, default=10, help='update timesteps in one episode (inner update)')
 
-    parser.add_argument('--batch_size', type=int, default=32, help='input batch size for training (default: 32)')
+    parser.add_argument('--batch_size', type=int, default=10, help='input batch size for training (default: 32)')
     parser.add_argument('--test-batch-size', type=int, default=1000, help='input batch size for testing (default: 1000)')
 
     parser.add_argument('--max_steps', type=int, default=100, help='maximum number of steps (default: 100)')

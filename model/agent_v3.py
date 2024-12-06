@@ -166,8 +166,6 @@ class MetaPPO(PPO):
         self.device = device
         self.terminate = False
 
-        self.local_policy_nets = [[] for _ in range(3)]
-
     def adapt_to_task(self, args, local_policy_net, env, initial_observation, factor):
 
         timesteps = args.max_timesteps
@@ -184,27 +182,46 @@ class MetaPPO(PPO):
         return local_policy_net
 
     def global_evaluate(self, global_policy_net, env, initial_observation, factor=None, timesteps=100):
-        global_ppo = PPO(self.args, self.device, global_policy_net)
+        total_rewards = 0
+        total_dones = 0
+        global_infos = []
+        for t in range(timesteps):
+            with torch.no_grad():
+                state = torch.Tensor(initial_observation).to(self.device)
+                state = torch.Tensor(state).to(self.device)
+                actions_mean, actions_std, _ = global_policy_net(state)
+                dist_ = torch.distributions.Normal(actions_mean, actions_std)
+                sampled_actions = dist_.sample()
+                action = sampled_actions.cpu().detach()
+                action_with_factor = (action.numpy().ravel(), factor)
 
-        self.rollout(env, initial_observation, global_ppo, factor, timesteps)
+            next_state, reward, done, terminate, info = env.step(action_with_factor)
 
-        return sum(global_ppo.buffer.rewards), sum(global_ppo.buffer.dones), global_ppo.buffer.infos
+            total_rewards += reward
+            total_dones += done
+            global_infos.append(info)
 
-    def aggregate_local_to_global(self, episode, global_policy_net):
+        average_reward = total_rewards / total_dones if total_dones > 0 else 0
+        return total_rewards, average_reward, global_infos
+
+
+    def aggregate_local_to_global(self, episode, local_policy_nets, global_policy_net):
         global_params = OrderedDict(global_policy_net.named_parameters())
         if episode == 0:
             for name, param in global_params.items():
                 param.data.copy_(torch.zeros_like(param.data))
 
-        for local_policy in self.local_policy_nets:
+        for local_policy in local_policy_nets:
             local_params = OrderedDict(local_policy.named_parameters())
             for (name, param), (_, local_param) in zip(global_params.items(), local_params.items()):
                 param.data += local_param.data
 
         for name, param in global_params.items():
-            param.data /= len(self.local_policy_nets)
+            param.data /= len(local_policy_nets)
 
         return global_policy_net.load_state_dict(global_params)
+
+    def aggregate_local_to_global(self, episode, local_policy_nets, global_policy_net):
 
     def rollout(self, env, initial_observation, ppo, factor, timesteps):
 
@@ -232,9 +249,8 @@ class MetaPPO(PPO):
         plt.xlabel('Episode')
         plt.ylabel('Episode Rewards')
         plt.legend()
-        plt.show()
-        plt.pause(1)
-        plt.close()
+        plt.savefig(self.args.reward_folder + '/test/rewards.png')
+
 
 class RolloutBuffer:
     def __init__(self):
