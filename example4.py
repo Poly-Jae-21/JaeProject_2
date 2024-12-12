@@ -1,13 +1,13 @@
+import torch
+import torch.nn as nn
 
-import numpy as np
+# Create a LogSoftmax module
+log_softmax = nn.LogSoftmax(dim=1)  # Apply the function along dimension 1
 
-a = np.array([[0,0,0]])
-b = np.array([3,4])
-d = np.array([[4,5,6]])
-print(a[-1])
-c = np.hstack((b, np.array([0])))[np.newaxis, :]
-print(c[-1])
+# Input tensor
+x = torch.tensor()
 
-c = np.append(c, d, axis=0)
-print(c)
+# Apply LogSoftmax
+output = log_softmax(x)
 
+print(output)

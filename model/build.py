@@ -31,7 +31,7 @@ def argument():
     parser.add_argument('--test-batch-size', type=int, default=1000, help='input batch size for testing (default: 1000)')
 
     parser.add_argument('--max_steps', type=int, default=100, help='maximum number of steps (default: 100)')
-    parser.add_argument('--inner_steps', type=int, default=10, help='number of steps to train (default: 10)')
+    parser.add_argument('--inner_steps', type=int, default=2, help='number of steps to train (default: 10)')
     parser.add_argument('--gamma', type=float, default=0.95, help='discount factor (default: 0.95)')
     parser.add_argument('--lambda_', type=float, default=0.95, help='lambda parameter (default: 0.95)')
 
