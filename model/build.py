@@ -27,7 +27,7 @@ def argument():
     parser.add_argument('--max_timesteps', type=int, default=100, help='maximum timesteps in one episode')
     parser.add_argument('--update_timesteps', type=int, default=10, help='update timesteps in one episode (inner update)')
 
-    parser.add_argument('--batch_size', type=int, default=10, help='input batch size for training (default: 32)')
+    parser.add_argument('--batch_size', type=int, default=20, help='input batch size for training (default: 32)')
     parser.add_argument('--test-batch-size', type=int, default=1000, help='input batch size for testing (default: 1000)')
 
     parser.add_argument('--max_steps', type=int, default=100, help='maximum number of steps (default: 100)')
@@ -35,7 +35,7 @@ def argument():
     parser.add_argument('--gamma', type=float, default=0.95, help='discount factor (default: 0.95)')
     parser.add_argument('--lambda_', type=float, default=0.95, help='lambda parameter (default: 0.95)')
 
-    parser.add_argument('--lr', type=float, default=1e-4, help='learning rate (default: 1e-4)')
+    parser.add_argument('--lr', type=float, default=1e-5, help='learning rate (default: 1e-4)')
     parser.add_argument('--clip_epsilon', type=float, default=0.2, help='clipping parameter (default: 0.2)')
     parser.add_argument('--value_coeff', type=float, default=0.5, help='value coefficient (default: 0.5)')
     parser.add_argument('--entropy_coeff', type=float, default=0.01, help='entropy coefficient (default: 0.01)')

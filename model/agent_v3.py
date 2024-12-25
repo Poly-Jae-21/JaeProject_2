@@ -1,29 +1,29 @@
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 import matplotlib.pyplot as plt
 
 from collections import OrderedDict
 
 class CNNPolicyNetwork(nn.Module):
-    def __init__(self):
+    def __init__(self, obs_space, action_space):
         super(CNNPolicyNetwork, self).__init__()
         self.shared_net = nn.Sequential(
-            nn.Conv2d(1, 32, 3, 1, 1),
+            nn.Conv2d(obs_space, 32, 3, 1, 1),
             nn.ReLU(),
             nn.MaxPool2d(2, 2),
             nn.Conv2d(32, 64, 3, 1, 1),
             nn.ReLU(),
             nn.MaxPool2d(2, 2),
-            nn.Linear(64 * 25 * 25, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
         )
 
+        self.fc1 = nn.Linear(64 * 25 * 25, 128)
+        self.fc2 = nn.Linear(128, 64)
+
         self.policy_mean_net = nn.Sequential(
-            nn.Linear(64, 3),
+            nn.Linear(64, action_space),
             nn.Tanh()
         )
 
@@ -31,22 +31,31 @@ class CNNPolicyNetwork(nn.Module):
             nn.Linear(64, 1)
         )
 
+    def forward(self, state):
+        shared_features = self.shared_net(state)
+        shared_features = torch.flatten(shared_features, start_dim=1)
+
+        shared_net = F.relu(self.fc1(shared_features))
+        shared_net = F.relu(self.fc2(shared_net))
+
+        mean = self.policy_mean_net(shared_net)
+        value = self.value_net(shared_net)
+        return mean, value
+
 class PolicyNetwork(nn.Module):
     def __init__(self, obs_space, action_space):
         super(PolicyNetwork, self).__init__()
 
         self.shared_net = nn.Sequential(
-            nn.Linear(obs_space, 5000),
-            nn.ReLU(),
-            nn.Linear(5000, 1000),
-            nn.ReLU(),
+            nn.Linear(obs_space, 1000),
+            nn.LeakyReLU(),
             nn.Linear(1000, 100),
-            nn.ReLU(),
+            nn.LeakyReLU(),
         )
 
         self.policy_mean_net = nn.Sequential(
             nn.Linear(100, action_space),
-            nn.Tanh()
+            nn.Softsign()
         )
 
         self.value_net = nn.Sequential(
@@ -77,7 +86,6 @@ class PPO:
 
     def select_action(self, state):
         state = torch.Tensor(state).to(self.device)
-        print(state.max(), state.min())
         actions_mean, value = self.local_policy_net(state)
 
 
@@ -175,6 +183,7 @@ class PPO:
 
                 # Total loss
                 loss = policy_loss + value_loss + entropy_loss
+                print(loss, policy_loss, value_loss, entropy_loss)
 
                 assert not torch.isnan(loss).any(), "Loss contains Nan"
 
@@ -215,7 +224,6 @@ class MetaPPO(PPO):
 
         returns = ppo.compute_gae(self.gamma, self.lam)
 
-        print(len(returns))
         ppo.update(returns)
 
         return local_policy_net

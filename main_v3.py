@@ -1,4 +1,4 @@
-from model.agent_v3 import PolicyNetwork
+from model.agent_v3 import PolicyNetwork, CNNPolicyNetwork
 from model.train_v3 import train
 from model.build import argument
 import torch
@@ -13,8 +13,8 @@ def main():
     env = gym.make('UrbanEnvChicago-v1', render_mode='human')
 
     # Global shared policy network
+    #global_policy_net = CNNPolicyNetwork(env.observation_space.shape, env.action_space.n).to(device)
     global_policy_net = PolicyNetwork(env.observation_space.shape[0], env.action_space.n).to(device)
-
     local_policy_nets = [
         PolicyNetwork(env.observation_space.shape[0], env.action_space.n).to(device)
         for _ in range(3)
