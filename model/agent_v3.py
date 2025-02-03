@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import matplotlib.pyplot as plt
+import numpy as np
 
 from collections import OrderedDict
 
@@ -81,19 +82,21 @@ class PPO:
         self.batch_size = args.batch_size
         self.device = device
         self.cov_mat = cov_mat
+        self.max_grad_norm = 1.0
 
         self.buffer = RolloutBuffer()
 
+        self.loss = None
+
     def select_action(self, state):
         state = torch.Tensor(state).to(self.device)
+        self.buffer.states.append(state)
+
         actions_mean, value = self.local_policy_net(state)
-
-
         dist_ = torch.distributions.Normal(actions_mean, self.cov_mat)
         sampled_actions = dist_.sample()
         log_probs = dist_.log_prob(sampled_actions)
 
-        self.buffer.states.append(state)
         self.buffer.actions.append(sampled_actions.cpu().detach())
         self.buffer.logprobs.append(log_probs.cpu().detach().sum(dim=-1))
         self.buffer.values.append(value.cpu().detach())
@@ -105,15 +108,13 @@ class PPO:
         rewards = self.buffer.rewards
         values = self.buffer.values
         dones = self.buffer.dones
-        next_value = values[-1]
 
         gae = 0
         returns = []
         for i in reversed(range(len(rewards))):
-            delta = rewards[i] + gamma * (1 - dones[i]) * next_value - values[i]
+            delta = rewards[i] + gamma * (1 - dones[i]) * values[i+1] - values[i]
             gae = delta + gamma * lam * gae * (1 - dones[i])
             returns.insert(0, gae + values[i])
-            next_value = values[i]
 
         return returns
 
@@ -126,24 +127,34 @@ class PPO:
 
         returns = torch.tensor(returns, dtype=torch.float32).to(self.device)
 
-
         advantages = returns.detach() - old_values.detach()
 
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10)
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8) # adjustment of epsilon (1e-10 -> 1e-8)
 
         dataset_size = old_states.size(0)
         batch_iter = int(math.ceil(dataset_size / self.batch_size))
 
         for _ in range(self.inner_steps):
-
+            '''
             perm = torch.randperm(dataset_size).to(self.device)
             shuffled_states = old_states.index_select(0, perm)
             shuffled_actions = old_actions.index_select(0, perm)
             shuffled_log_probs = old_log_probs.index_select(0, perm)
             shuffled_returns = returns.index_select(0, perm)
             shuffled_advantages = advantages.index_select(0, perm)
+            '''
+
+            batch_sequence = []
+            for i in range(batch_iter):
+                start_idx = i * self.batch_size
+                end_idx = min((i + 1) * self.batch_size, dataset_size)
+                batch_sequence.append(list(range(start_idx, end_idx)))
+
+            np.random.shuffle(batch_sequence)
 
             for i in range(batch_iter):
+                batch_indices = batch_sequence[i]
+                '''
                 start_idx = i * self.batch_size
                 end_idx = min((i+1)*self.batch_size, dataset_size)
                 batch_indices = slice(start_idx, end_idx)
@@ -153,9 +164,13 @@ class PPO:
                 batch_advantages = shuffled_advantages[batch_indices]
                 batch_returns = shuffled_returns[batch_indices]
                 batch_old_log_probs = shuffled_log_probs[batch_indices]
+                '''
+                batch_old_states = old_states[batch_indices]
+                batch_old_actions = old_actions[batch_indices]
+                batch_advantages = advantages[batch_indices]
+                batch_returns = returns[batch_indices]
+                batch_old_log_probs = old_log_probs[batch_indices]
 
-                assert not torch.isnan(batch_old_states).any(), "state contains NaN"
-                assert not torch.isnan(batch_old_actions).any(), "action contains NaN"
                 new_action_mean, new_value = self.local_policy_net(batch_old_states)
 
                 new_value = new_value.squeeze()
@@ -169,6 +184,7 @@ class PPO:
                 entropy = dist.entropy().mean()
 
                 ratio = torch.exp(new_log_probs - batch_old_log_probs)
+                ratio = ratio.view(-1,1)
 
                 # Policy loss
                 surrogate_1 = ratio * batch_advantages
@@ -183,17 +199,25 @@ class PPO:
 
                 # Total loss
                 loss = policy_loss + value_loss + entropy_loss
-                print(loss, policy_loss, value_loss, entropy_loss)
 
                 assert not torch.isnan(loss).any(), "Loss contains Nan"
 
                 # Gradient descent step
+
                 self.optimizer.zero_grad()
+
                 loss.backward()
 
+                #torch.nn.utils.clip_grad_norm_(self.local_policy_net.parameters(), self.max_grad_norm)
+
                 self.optimizer.step()
+                self.loss = loss
+
 
         self.buffer.clear()
+
+    def loss_value(self):
+        return self.loss
 
 class MetaPPO(PPO):
     def __init__(self, device, env, args, batch_size=32):
@@ -229,11 +253,11 @@ class MetaPPO(PPO):
         return local_policy_net
 
     def global_evaluate(self, global_policy_net, env, state, factor=None, timesteps=100):
+
+        env_update = True
         total_rewards = 0
         done = False
         global_infos = []
-        print("4")
-        print(factor)
         dones = 1
         while not done:
             with torch.no_grad():
@@ -242,39 +266,43 @@ class MetaPPO(PPO):
                 dist_ = torch.distributions.Normal(actions_mean, self.cov_mat)
                 sampled_actions = dist_.sample()
                 action = sampled_actions.cpu().detach()
-                action_with_factor = (action.numpy().ravel(), factor)
+                action_with_factor = (action.numpy().ravel(), factor, env_update)
+                next_state, reward, done, terminate, info = env.step(action_with_factor)
 
-            next_state, reward, done, terminate, info = env.step(action_with_factor)
-
-            total_rewards += reward
-            global_infos.append(info)
-            state = next_state
-            if done is False:
-                dones += 1
-        print("5")
+                total_rewards += reward
+                global_infos.append(info)
+                state = next_state
+                if done is False:
+                    dones += 1
         average_reward = total_rewards / dones
         return total_rewards, average_reward, global_infos
 
     def aggregate_local_to_global(self, episode, local_policy_nets, global_policy_net):
         global_parms = OrderedDict(global_policy_net.named_parameters())
 
-        if episode == 0:
-            with torch.no_grad():
+        with torch.no_grad():
+            if episode == 0:
                 for name, param in global_parms.items():
                     param.copy_(torch.zeros_like(param))
 
-        with torch.no_grad():
-            for local_policy in local_policy_nets:
-                local_params = OrderedDict(local_policy.named_parameters())
-                for (name, param), (_, local_param) in zip(global_parms.items(), local_params.items()):
-                    param.add_(local_param)
+                for local_policy in local_policy_nets:
+                    local_params = OrderedDict(local_policy.named_parameters())
+                    for (name, param), (_, local_param) in zip(global_parms.items(), local_params.items()):
+                        param.add_(local_param)
 
-            if episode == 0:
+                divisor = len(local_policy_nets) + (1 if episode > 0 else 0)
                 for name, param in global_parms.items():
-                    param.div_(len(local_policy_nets))
-            else:
+                    param.div_(divisor)
+
+            if episode > 0:
+                for local_policy in local_policy_nets:
+                    local_params = OrderedDict(local_policy.named_parameters())
+                    for (name, param), (_, local_param) in zip(global_parms.items(), local_params.items()):
+                        param.add_(local_param)
+
+                divisor = len(local_policy_nets) + (1 if episode > 0 else 0)
                 for name, param in global_parms.items():
-                    param.div_(len(local_policy_nets)+1)
+                    param.div_(divisor)
 
         global_policy_net.load_state_dict(global_parms)
 
@@ -284,29 +312,33 @@ class MetaPPO(PPO):
 
         state = initial_observation
         done = False
+        env_update = False
         while not done:
 
             action = ppo.select_action(state)
-            action_with_factor = (action.numpy().ravel(), factor)
+            action_with_factor = (action.numpy().ravel(), factor, env_update)
             next_state, reward, done, terminate, info = env.step(action_with_factor)
             self.terminate = terminate
 
             ppo.buffer.rewards.append(reward)
             ppo.buffer.dones.append(done)
             ppo.buffer.infos.update(info)
+            state = next_state
 
-            if not done:
-                state = next_state
+            if done:
+                _, next_value = ppo.local_policy_net(torch.Tensor(next_state).to(self.device))
+                ppo.buffer.values.append(next_value.cpu().detach())
 
-    def plot(self, epi_rewards_list, average_rewards_list, episode):
+
+    def plot(self, epi_rewards_list, average_rewards_list, episode, factor):
         plt.figure()
-        plt.plot(epi_rewards_list, label='Episode total Rewards')
-        plt.plot(average_rewards_list, label='Average Rewards')
-        plt.title('Episode {} Rewards'.format(episode))
+        #plt.plot(epi_rewards_list, label='Episode total Rewards')
+        plt.plot(average_rewards_list, label='Average {} Rewards'.format(factor))
+        plt.title('Episode_{} {} Rewards'.format(episode, factor))
         plt.xlabel('Episode')
-        plt.ylabel('Episode Rewards')
+        plt.ylabel('Episode average Rewards')
         plt.legend()
-        plt.savefig(self.args.reward_folder + '/test/rewards.png')
+        plt.savefig(self.args.reward_folder + '/test/{}_rewards.png'.format(factor))
 
 
 class RolloutBuffer:

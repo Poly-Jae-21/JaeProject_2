@@ -4,19 +4,19 @@ from model.build import argument
 import torch
 import gymnasium as gym
 
-gym.register('UrbanEnvChicago-v1', entry_point='template.env_name.envs.multi_policies:ChicagoMultiPolicyMap')
+gym.register('UrbanEnvChicago-v2', entry_point='template.env_name.envs.multi_policies:ChicagoMultiPolicyMapv2')
 
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Create one common environment for whole workers
-    env = gym.make('UrbanEnvChicago-v1', render_mode='human')
+    env = gym.make('UrbanEnvChicago-v2', render_mode='human')
 
     # Global shared policy network
     #global_policy_net = CNNPolicyNetwork(env.observation_space.shape, env.action_space.n).to(device)
-    global_policy_net = PolicyNetwork(env.observation_space.shape[0], env.action_space.n).to(device)
+    global_policy_net = PolicyNetwork(env.observation_space.shape[0], env.action_space.shape[0]).to(device)
     local_policy_nets = [
-        PolicyNetwork(env.observation_space.shape[0], env.action_space.n).to(device)
+        PolicyNetwork(env.observation_space.shape[0], env.action_space.shape[0]).to(device)
         for _ in range(3)
     ]
 

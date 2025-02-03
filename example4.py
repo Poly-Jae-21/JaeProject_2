@@ -1,13 +1,12 @@
-import torch
-import torch.nn as nn
+import gymnasium as gym
+env = gym.make('CartPole-v0')
 
-# Create a LogSoftmax module
-log_softmax = nn.LogSoftmax(dim=1)  # Apply the function along dimension 1
+action = env.action_space.sample()
+print(action)
 
-# Input tensor
-x = torch.tensor()
+state, _ = env.reset()
 
-# Apply LogSoftmax
-output = log_softmax(x)
-
-print(output)
+next_state, reward, done, terminate, info = env.step(action)
+print(next_state, reward)
+next_state, reward, done, terminate, info = env.step(action)
+print(next_state, reward)
