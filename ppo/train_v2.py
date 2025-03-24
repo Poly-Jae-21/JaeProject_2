@@ -9,7 +9,7 @@ import torchopt
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 
-from model.agent_v2 import PolicyNetwork, MetaPPO
+from ppo.agent_v2 import PolicyNetwork, MetaPPO
 
 import gym.vector
 import torch.distributed as dist

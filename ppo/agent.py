@@ -1,8 +1,8 @@
 import torch
 import numpy as np
 import torch.nn as nn
-from model.buffer import RolloutBuffer
-from model.core import ActorCritic
+from ppo.buffer import RolloutBuffer
+from ppo.core import ActorCritic
 import utils.misc as misc
 class PPO(nn.Module):
     def __init__(self, obs_space, action_space, ac_kwargs, writer, device, seed=42, lr=3e-4, clip_ratio=0.2, value_coeff=0.5, entropy_coeff=0.01, max_grad_norm=0.5, **kwargs):

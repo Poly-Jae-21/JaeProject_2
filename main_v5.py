@@ -3,7 +3,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 import datetime
 
-from model.build import argument
+from utils.build import argument
 
 gym.register('UrbanEnvChicago-v2', entry_point='template.env_name.envs.multi_policies:ChicagoMultiPolicyMap_v2')
 env = gym.make('UrbanEnvChicago-v2', render_mode='human')

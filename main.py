@@ -1,11 +1,7 @@
-import os
-
-from model.agent_v2 import PolicyNetwork
-from model.train_v2 import train_meta_worker
-from model.build import argument
+from ppo.agent_v2 import PolicyNetwork
+from ppo.train_v2 import train_meta_worker
+from utils.build import argument
 import torch
-from torch.utils.tensorboard import SummaryWriter
-from utils.logger import configure_logger
 import torch.multiprocessing as mp
 import gym
 
@@ -38,7 +34,7 @@ def main():
 
     # Save the final global policy after meta-training
     torch.save(global_global_policy_net.state_dict(), 'out/result/model', "global_global_policy_net.pt")
-    #torch.save(meta_global_policy_net.state_dict(), 'out/result/model', 'meta_global_policy_net.pt')
+    #torch.save(meta_global_policy_net.state_dict(), 'out/result/ppo', 'meta_global_policy_net.pt')
 
 if __name__ == "__main__":
     main()

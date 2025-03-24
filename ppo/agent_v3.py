@@ -48,19 +48,19 @@ class PolicyNetwork(nn.Module):
         super(PolicyNetwork, self).__init__()
 
         self.shared_net = nn.Sequential(
-            nn.Linear(obs_space, 1000),
+            nn.Linear(obs_space, 128),
             nn.LeakyReLU(),
-            nn.Linear(1000, 100),
+            nn.Linear(128, 64),
             nn.LeakyReLU(),
         )
 
         self.policy_mean_net = nn.Sequential(
-            nn.Linear(100, action_space),
+            nn.Linear(64, action_space),
             nn.Softsign()
         )
 
         self.value_net = nn.Sequential(
-            nn.Linear(100, 1)
+            nn.Linear(64, 1)
         )
 
 
@@ -73,7 +73,8 @@ class PolicyNetwork(nn.Module):
 class PPO:
     def __init__(self, args, device, local_policy_net, cov_mat):
         self.local_policy_net = local_policy_net
-        self.optimizer = optim.Adam(self.local_policy_net.parameters(), lr=args.lr)
+        #self.optimizer = optim.Adam(self.local_policy_net.parameters(), lr=args.lr)
+        self.optimizer = optim.RMSprop(self.local_policy_net.parameters(), lr=args.lr)
         self.gamma = args.gamma
         self.clip_epsilon = args.clip_epsilon
         self.value_coeff = args.value_coeff
@@ -94,11 +95,12 @@ class PPO:
 
         actions_mean, value = self.local_policy_net(state)
         dist_ = torch.distributions.Normal(actions_mean, self.cov_mat)
-        sampled_actions = dist_.sample()
-        log_probs = dist_.log_prob(sampled_actions)
+
+        sampled_actions = dist_.rsample()
+        log_prob_ = dist_.log_prob(sampled_actions)
 
         self.buffer.actions.append(sampled_actions.cpu().detach())
-        self.buffer.logprobs.append(log_probs.cpu().detach().sum(dim=-1))
+        self.buffer.logprobs.append(log_prob_.cpu().detach().sum(dim=-1))
         self.buffer.values.append(value.cpu().detach())
 
         return sampled_actions.cpu().detach()
@@ -179,7 +181,8 @@ class PPO:
 
                 dist = torch.distributions.Normal(new_action_mean, self.cov_mat)
 
-                sampled_actions = dist.sample()
+                sampled_actions = dist.rsample()
+
                 new_log_probs = dist.log_prob(sampled_actions).sum(dim=-1)
                 entropy = dist.entropy().mean()
 
@@ -234,7 +237,7 @@ class MetaPPO(PPO):
         self.device = device
         self.terminate = False
 
-        self.cov_var = torch.full(size=(1,3), fill_value=0.5).to(device)
+        self.cov_var = torch.full(size=(1,3), fill_value=0.1).to(device)
         self.cov_mat = torch.diag(self.cov_var)
 
     def adapt_to_task(self, args, local_policy_net, env, initial_observation, factor):
@@ -252,9 +255,9 @@ class MetaPPO(PPO):
 
         return local_policy_net
 
-    def global_evaluate(self, global_policy_net, env, state, factor=None, timesteps=100):
+    def global_evaluate(self, global_policy_net, env, state, env_update = True, factor=None, timesteps=100):
 
-        env_update = True
+        env_update = env_update
         total_rewards = 0
         done = False
         global_infos = []
@@ -266,7 +269,7 @@ class MetaPPO(PPO):
                 dist_ = torch.distributions.Normal(actions_mean, self.cov_mat)
                 sampled_actions = dist_.sample()
                 action = sampled_actions.cpu().detach()
-                action_with_factor = (action.numpy().ravel(), factor, env_update)
+                action_with_factor = (action.numpy().ravel(), factor, env_update, False)
                 next_state, reward, done, terminate, info = env.step(action_with_factor)
 
                 total_rewards += reward
@@ -316,7 +319,7 @@ class MetaPPO(PPO):
         while not done:
 
             action = ppo.select_action(state)
-            action_with_factor = (action.numpy().ravel(), factor, env_update)
+            action_with_factor = (action.numpy().ravel(), factor, env_update, False)
             next_state, reward, done, terminate, info = env.step(action_with_factor)
             self.terminate = terminate
 
@@ -339,6 +342,7 @@ class MetaPPO(PPO):
         plt.ylabel('Episode average Rewards')
         plt.legend()
         plt.savefig(self.args.reward_folder + '/test/{}_rewards.png'.format(factor))
+        plt.close()
 
 
 class RolloutBuffer:

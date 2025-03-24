@@ -1,8 +1,7 @@
 
 import gymnasium as gym
-import torch
-from model.train_v4 import train, test
-from model.build import argument
+from ppo.train_v4 import train, test
+from utils.build import argument
 
 gym.register('UrbanEnvChicago-v1', entry_point='template.env_name.envs.multi_policies:ChicagoMultiPolicyMap')
 if __name__ == '__main__':

@@ -1,6 +1,10 @@
-from model.agent_v3 import PolicyNetwork, CNNPolicyNetwork
-from model.train_v3 import train
-from model.build import argument
+from ppo.agent_v3 import PolicyNetwork
+from ppo.train_v3 import train
+
+from a2c.model import PolicyNetwork
+from a2c.train import train
+
+from utils.build import argument
 import torch
 import gymnasium as gym
 
@@ -12,16 +16,17 @@ def main():
     # Create one common environment for whole workers
     env = gym.make('UrbanEnvChicago-v2', render_mode='human')
 
+    args = argument()
+
     # Global shared policy network
-    #global_policy_net = CNNPolicyNetwork(env.observation_space.shape, env.action_space.n).to(device)
-    global_policy_net = PolicyNetwork(env.observation_space.shape[0], env.action_space.shape[0]).to(device)
+    global_policy_net = PolicyNetwork(env.observation_space.shape[0],  env.action_space.shape[0]).to(device)
     local_policy_nets = [
         PolicyNetwork(env.observation_space.shape[0], env.action_space.shape[0]).to(device)
         for _ in range(3)
     ]
 
     world_size = 3
-    args = argument()
+
     train_ = train()
     train_.train(global_policy_net, local_policy_nets, device, world_size, args, env)
 

@@ -42,7 +42,7 @@ input_dim = 5  # Example input dimension
 hidden_dim = 64
 output_dim = 3  # Predict x, y, capacity
 
-# Instantiate the Probabilistic Actor model
+# Instantiate the Probabilistic Actor ppo
 actor = ProbabilisticActor(input_dim, hidden_dim, output_dim)
 
 # Example state input

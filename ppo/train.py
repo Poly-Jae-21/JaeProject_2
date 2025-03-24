@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torchopt
 from torch.utils.tensorboard import SummaryWriter
-from model.agent import PPO
+from ppo.agent import PPO
 
 import gym.vector
 
