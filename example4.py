@@ -1,2 +1,6 @@
-a = [i for i in range(1,11)]
-print(a)
+import numpy as np
+
+a = [1, 2, 3]
+b = [4, 5, 6]
+c = (np.array(a) + np.array(b)) / 2
+print(c)

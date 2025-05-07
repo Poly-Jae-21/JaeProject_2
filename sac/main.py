@@ -17,16 +17,14 @@ def main():
 
     # Global shared policy network
 
-    global_policy_nets = []
-    for _ in range(1):
-        global_policy = GaussianPolicy(env.observation_space.shape[0], env.action_space.shape[0], args.hidden_dim).to(device)
-        global_critic = QNetwork(env.observation_space.shape[0], env.action_space.shape[0], args.hidden_dim).to(device)
-        global_target_critic = QNetwork(env.observation_space.shape[0], env.action_space.shape[0], args.hidden_dim).to(device)
-        global_policy_nets.append({
-            'policy': global_policy,
-            'critic': global_critic,
-            'target_critic': global_target_critic,
-        })
+    global_policy = GaussianPolicy(env.observation_space.shape[0], env.action_space.shape[0], args.hidden_dim).to(device)
+    global_critic = QNetwork(env.observation_space.shape[0], env.action_space.shape[0], args.hidden_dim).to(device)
+    global_target_critic = QNetwork(env.observation_space.shape[0], env.action_space.shape[0], args.hidden_dim).to(device)
+    global_policy_nets = {
+        'policy': global_policy,
+        'critic': global_critic,
+        'target_critic': global_target_critic,
+    }
 
     local_policy_nets = []
     for _ in range(3):

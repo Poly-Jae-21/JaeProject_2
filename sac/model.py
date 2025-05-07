@@ -98,7 +98,10 @@ class GaussianPolicy(nn.Module):
         log_prob = normal.log_prob(x_t)
 
         log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + eps)
-        log_prob = log_prob.sum(1, keepdim=True)
+        if len(log_prob) == 3:
+            log_prob = log_prob.sum(-1, keepdim=True)
+        else:
+            log_prob = log_prob.sum(1, keepdim=True)
         mean = torch.tanh(mean) * self.action_scale + self.action_bias
         return action, log_prob, mean
 
@@ -143,14 +146,14 @@ class DeterministicPolicy(nn.Module):
         return super(DeterministicPolicy, self).to(device)
 
 import os
-from torch.optim import Adam
+from torch.optim import Adam, RMSprop
 from update import soft_update, hard_update
 import math
 import numpy as np
 from collections import OrderedDict
 
-class SAC(object):
-    def __init__(self, args, device, memory, local_critic, local_target_critic, local_policy):
+class SAC:
+    def __init__(self, args, device, local_critic, local_target_critic, local_policy):
 
         self.gamma = args.gamma
         self.tau = args.tau
@@ -161,12 +164,12 @@ class SAC(object):
         self.target_update_interval = args.target_update_interval
         self.automatic_entropy_tuning = args.automatic_entropy_tuning
 
-        self.buffer = memory
+        self.buffer = RolloutBuffer()
 
         self.device = device
 
         self.critic = local_critic
-        self.critic_optim = Adam(self.critic.parameters(), lr=args.lr)
+        self.critic_optim = RMSprop(self.critic.parameters(), lr=args.lr)
 
         self.critic_target = local_target_critic
         hard_update(self.critic_target, self.critic)
@@ -174,27 +177,29 @@ class SAC(object):
         if self.automatic_entropy_tuning is True:
             self.target_entropy = -torch.prod(torch.Tensor(3).to(self.device)).item()
             self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
-            self.alpha_optim = Adam([self.log_alpha], lr=args.lr)
+            self.alpha_optim = RMSprop([self.log_alpha], lr=args.lr)
 
         self.policy = local_policy
-        self.policy_optim = Adam(self.policy.parameters(), lr=args.lr)
+        self.policy_optim = RMSprop(self.policy.parameters(), lr=args.lr)
 
     def select_action(self, state, eval=False):
         state = torch.Tensor(state).to(self.device)
+        self.buffer.states.append(state)
 
         if eval is False:
             action, _, _ = self.policy.sample(state)
         else:
             _, _, action = self.policy.sample(state)
 
+        self.buffer.actions.append(action)
         return action.cpu().detach()
 
     def update(self, updates):
         old_state = torch.stack(self.buffer.states, dim=0).to(self.device)
-        old_next_state = torch.stack(self.buffer.next_states, dim=0).to(self.device)
+        old_next_state = torch.stack([torch.tensor(s, dtype=torch.float32) for s in self.buffer.next_states], dim=0).to(self.device)
         old_action = torch.stack(self.buffer.actions, dim=0).to(self.device)
-        old_reward = torch.stack(self.buffer.rewards, dim=0).to(self.device)
-        old_mask = torch.stack(self.buffer.masks, dim=0).to(self.device)
+        old_reward = torch.stack([torch.tensor(s, dtype=torch.float32) for s in self.buffer.rewards], dim=0).to(self.device)
+        old_mask = torch.stack([torch.tensor(s, dtype=torch.float32) for s in self.buffer.masks], dim=0).to(self.device)
 
         dataset_size = old_state.size(0)
         batch_iter = int(math.ceil(dataset_size / self.batch_size))
@@ -252,11 +257,13 @@ class SAC(object):
             self.alpha = self.log_alpha.exp()
             alpha_tlogs = self.alpha.clone()
         else:
-            alpha_loss = torch.Tensor(0.).to(self.device)
-            alpha_tlogs = torch.Tensor(self.alpha)
+            alpha_loss = torch.tensor(0.0, device=self.device)
+            alpha_tlogs = torch.tensor(self.alpha)
 
         if updates % self.target_update_interval == 0:
             soft_update(self.critic_target, self.critic, self.tau)
+
+        self.buffer.clear()
 
         return qf1_loss.item(), qf2_loss.item(), policy_loss.item(), alpha_loss.item(), alpha_tlogs.item()
 
@@ -295,7 +302,7 @@ class SAC(object):
 import matplotlib.pyplot as plt
 
 class MetaSAC(SAC):
-    def __init__(self, device, env, args, batch_size=32):
+    def __init__(self, device, env, args, local_nets, batch_size=50):
         self.env = env
         self.args = args
         self.device = device
@@ -303,56 +310,68 @@ class MetaSAC(SAC):
         self.lr = args.lr
         self.batch_size = batch_size
 
-        self.memory = RolloutBuffer()
-
         self.terminate = False
+
+        self.local_policy_nets = {}
+        self.loss_dict = {}
+
+        self.local_policy_nets = {
+            'policy': local_nets['policy'],
+            'critic': local_nets['critic'],
+            'target_critic': local_nets['target_critic']
+        }
+        self.loss_dict = {
+            'critic_loss': None,
+            'critic_target_loss': None,
+            'policy_loss': None,
+            'ent_loss': None,
+            'alpha': None,
+        }
 
     def adapt_to_task(self, args, local_nets, env, state, factor, episode):
 
-        timesteps = args.max_timesteps
         env_update = False
         done = False
 
-        sac = SAC(args, self.device, self.memory, local_nets['critic'], local_nets['target_critic'], local_nets['policy'])
+        sac = SAC(args, self.device, local_nets['critic'], local_nets['target_critic'], local_nets['policy'])
 
         while not done:
-
-            self.memory.states.append(state)
 
             action = sac.select_action(state)
             action_with_factor = (action.numpy().ravel(), factor, env_update, False)
 
             next_state, reward, done, terminate, info = env.step(action_with_factor)
 
-            self.terminate = terminate
+            sac.buffer.next_states.append(next_state)
+            sac.buffer.rewards.append(reward)
 
-            self.memory.next_states.append(next_state)
-            self.memory.actions.append(action)
-            self.memory.rewards.append(reward)
+            self.terminate = terminate
 
             state = next_state
 
+            mask = 1 if done else float(not done)
+            sac.buffer.masks.append(mask)
+
             if done:
-                critic1_loss, critic2_loss, policy_loss, ent_loss, alpha = sac.update(episode)
+                if sum(sac.buffer.rewards) > -200:
+                    critic1_loss, critic2_loss, policy_loss, ent_loss, alpha = sac.update(episode)
 
-                local_policy_nets = []
+                    self.local_policy_nets = {
+                        'policy': sac.policy,
+                        'critic': sac.critic,
+                        'target_critic': sac.critic_target
+                    }
 
-                local_policy_nets.append({
-                    'policy': sac.policy,
-                    'critic': sac.critic,
-                    'target_critic': sac.critic_target
-                })
-
-                loss_list = []
-                loss_list.append({
-                    'critic_loss': critic1_loss,
-                    'critic_target_loss': critic2_loss,
-                    'policy_loss': policy_loss,
-                    'ent_loss': ent_loss,
-                    'alpha': alpha,
-                })
-
-                return local_policy_nets, loss_list
+                    self.loss_dict = {
+                        'critic_loss': critic1_loss,
+                        'critic_target_loss': critic2_loss,
+                        'policy_loss': policy_loss,
+                        'ent_loss': ent_loss,
+                        'alpha': alpha,
+                    }
+                    return self.local_policy_nets, self.loss_dict
+                else:
+                    return self.local_policy_nets, self.loss_dict
 
     def global_evaluate(self, global_nets, env, state, env_update=True, factor=None, timesteps=100):
 
@@ -364,7 +383,8 @@ class MetaSAC(SAC):
         while not done:
             with torch.no_grad():
                 state = torch.Tensor(state).to(self.device)
-                _, _, action = global_nets['policy'].sample(state).cpu().detach()
+                _, _, action = global_nets['policy'].sample(state)
+                action = action.cpu().detach()
                 action_with_factor = (action.numpy().ravel(), factor, env_update, False)
                 next_state, reward, done, terminate, info = env.step(action_with_factor)
 
@@ -408,43 +428,78 @@ class MetaSAC(SAC):
                     param.div_(divisor)
 
         global_policy_net.load_state_dict(global_parms)
-
+        global_policy_net = {'policy': global_policy_net}
         return global_policy_net
 
     def plot(self, epi_rewards_list, average_rewards_list, loss_list, episode, factor):
-        plt.figure()
-        plt.plot(epi_rewards_list)
-        plt.title("{} Rewards in Episode {}".format(factor, episode))
-        plt.xlabel("Episode")
-        plt.ylabel("Total Reward")
-        plt.savefig(self.args.reward_folder + '/test/{}_total_rewards.png'.format(factor))
+        if factor in ["environment", "economic", "urbanity"]:
+            plt.figure()
+            plt.plot(epi_rewards_list)
+            plt.title("{} Rewards in Episode {}".format(factor, episode))
+            plt.xlabel("Episode")
+            plt.ylabel("Total Reward")
+            plt.savefig(self.args.reward_folder + '/test/{}_total_rewards.png'.format(factor))
 
-        plt.figure()
-        plt.plot(average_rewards_list)
-        plt.title("{} Average Rewards in Episode {}".format(factor, episode))
-        plt.xlabel("Episode")
-        plt.ylabel("Average Reward")
-        plt.savefig(self.args.reward_folder + '/test/{}_average_rewards.png'.format(factor))
+            plt.figure()
+            plt.plot(average_rewards_list)
+            plt.title("{} Average Rewards in Episode {}".format(factor, episode))
+            plt.xlabel("Episode")
+            plt.ylabel("Average Reward")
+            plt.savefig(self.args.reward_folder + '/test/{}_average_rewards.png'.format(factor))
 
-        plt.plot(loss_list['policy_loss'])
-        plt.title("{} Policy Loss in Episode {}".format(factor, episode))
-        plt.xlabel("Episode")
-        plt.ylabel("Loss")
-        plt.savefig(self.args.reward_folder + '/test/{}_policy_loss.png'.format(factor))
+            plt.plot(loss_list['policy_loss'])
+            plt.title("{} Policy Loss in Episode {}".format(factor, episode))
+            plt.xlabel("Episode")
+            plt.ylabel("Loss")
+            plt.savefig(self.args.reward_folder + '/test/{}_policy_loss.png'.format(factor))
 
-        plt.plot(loss_list['critic_loss'])
-        plt.title("{} Critic Loss in Episode {}".format(factor, episode))
-        plt.xlabel("Episode")
-        plt.ylabel("Loss")
-        plt.savefig(self.args.reward_folder + '/test/{}_critic_loss.png'.format(factor))
+            plt.plot(loss_list['critic_loss'])
+            plt.title("{} Critic Loss in Episode {}".format(factor, episode))
+            plt.xlabel("Episode")
+            plt.ylabel("Loss")
+            plt.savefig(self.args.reward_folder + '/test/{}_critic_loss.png'.format(factor))
 
-        plt.plot(loss_list['critic_target_loss'])
-        plt.title("{} Critic Target Loss in Episode {}".format(factor, episode))
-        plt.xlabel("Episode")
-        plt.ylabel("Loss")
-        plt.savefig(self.args.reward_folder + '/test/{}_critic_target_loss.png'.format(factor))
+            plt.plot(loss_list['critic_target_loss'])
+            plt.title("{} Critic Target Loss in Episode {}".format(factor, episode))
+            plt.xlabel("Episode")
+            plt.ylabel("Loss")
+            plt.savefig(self.args.reward_folder + '/test/{}_critic_target_loss.png'.format(factor))
 
-        plt.close()
+            plt.close()
+
+        elif factor == "average":
+            plt.figure()
+            plt.plot(epi_rewards_list)
+            plt.title("Entire Average Rewards in Episode {}".format(episode))
+            plt.xlabel("Episode")
+            plt.ylabel("Average Reward")
+            plt.savefig(self.args.reward_folder + '/test/entire_average_rewards.png')
+
+            plt.figure()
+            plt.plot(average_rewards_list)
+            plt.title("Entire Total Rewards in Episode {}".format(episode))
+            plt.xlabel("Episode")
+            plt.ylabel("Total Reward")
+            plt.savefig(self.args.reward_folder + '/test/entire_total_rewards.png')
+
+            plt.close()
+
+        else:
+            plt.figure()
+            plt.plot(epi_rewards_list)
+            plt.title("{} Rewards in Episode {}".format(factor, episode))
+            plt.xlabel("Episode")
+            plt.ylabel("Total Reward")
+            plt.savefig(self.args.reward_folder + '/test/{}_total_rewards.png'.format(factor))
+
+            plt.figure()
+            plt.plot(average_rewards_list)
+            plt.title("{} Average Rewards in Episode {}".format(factor, episode))
+            plt.xlabel("Episode")
+            plt.ylabel("Average Reward")
+            plt.savefig(self.args.reward_folder + '/test/{}_average_rewards.png'.format(factor))
+
+            plt.close()
 
 class RolloutBuffer:
     def __init__(self):

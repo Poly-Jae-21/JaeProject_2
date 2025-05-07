@@ -8,6 +8,9 @@ import numpy as np
 
 from collections import OrderedDict
 
+from main_v5 import reward
+
+
 class CNNPolicyNetwork(nn.Module):
     def __init__(self, obs_space, action_space):
         super(CNNPolicyNetwork, self).__init__()
@@ -223,7 +226,7 @@ class PPO:
         return self.loss
 
 class MetaPPO(PPO):
-    def __init__(self, device, env, args, batch_size=32):
+    def __init__(self, device, env, args, local_nets, batch_size=32):
         self.env = env
         self.args = args
 
@@ -240,20 +243,58 @@ class MetaPPO(PPO):
         self.cov_var = torch.full(size=(1,3), fill_value=0.1).to(device)
         self.cov_mat = torch.diag(self.cov_var)
 
-    def adapt_to_task(self, args, local_policy_net, env, initial_observation, factor):
+        self.local_policy_nets = {
+            'policy': local_nets['policy'],
+            'critic': local_nets['critic']
+        }
 
-        timesteps = args.max_timesteps
+        self.loss_dict = {
+            'policy_loss': None,
+            'critic_loss': None,
+            'entropy_loss': None
+        }
 
+    def adapt_to_task(self, args, local_policy_net, env, initial_observation, factor, episode):
+
+        env_update = False
+        done = False
 
         ppo = PPO(args, self.device, local_policy_net, self.cov_mat)
 
-        self.rollout(env, initial_observation, ppo, factor, timesteps)
+        while not done:
+            action = ppo.select_action(initial_observation)
+            action_with_factor = (action.numpy().ravel(), factor, env_update, False)
 
-        returns = ppo.compute_gae(self.gamma, self.lam)
+            next_state, reward, done, terminate, info = env.step(action_with_factor)
 
-        ppo.update(returns)
+            ppo.buffer.next_states.append(next_state)
+            ppo.buffer.rewards.append(reward)
 
-        return local_policy_net
+            self.terminate = terminate
+
+            state = next_state
+
+            mask = 1 if done else float(not done)
+            ppo.buffer.masks.append(mask)
+
+            if done:
+                if sum(ppo.buffer.rewards) > -200:
+                    policy_loss, critic_loss, entropy_loss = ppo.update(episode)
+
+                    self.local_policy_nets = {
+                        'policy': ppo.policy,
+                        'critic': ppo.critic
+                    }
+
+                    self.loss_dict = {
+                        'policy_loss': policy_loss,
+                        'critic_loss': critic_loss,
+                        'entropy_loss': entropy_loss
+                    }
+                    return self.local_policy_nets, self.loss_dict
+
+                else:
+                    return self.local_policy_nets, self.loss_dict
 
     def global_evaluate(self, global_policy_net, env, state, env_update = True, factor=None, timesteps=100):
 
