@@ -1,254 +1,558 @@
+import copy
+import csv
 import math
-import os
-from os import times
-
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
-import torch.distributed as dist
-import numpy as np
-from torch.autograd import Variable
-from collections import OrderedDict
-# Basic PPO policy and value network
 import matplotlib.pyplot as plt
-class PolicyNetwork(nn.Module):
+import numpy as np
+import os
+
+from collections import OrderedDict
+
+from torch.distributions import Beta, Normal
+
+
+class CNNPolicyNetwork(nn.Module):
     def __init__(self, obs_space, action_space):
-        super(PolicyNetwork, self).__init__()
+        super(CNNPolicyNetwork, self).__init__()
+        self.shared_net = nn.Sequential(
+            nn.Conv2d(obs_space, 32, 3, 1, 1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.Conv2d(32, 64, 3, 1, 1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+        )
 
-        self.fc1 = nn.Linear(obs_space, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.fc3 = nn.Linear(128, 64)
-        self.action_mean = nn.Linear(64, action_space)
-        self.value_head = nn.Linear(64, 1)
+        self.fc1 = nn.Linear(64 * 25 * 25, 128)
+        self.fc2 = nn.Linear(128, 64)
 
-    def forward(self, x):
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
-        x = torch.relu(self.fc3(x))
-        action_mean = self.action_mean(x)
-        value = self.value_head(x)
+        self.policy_mean_net = nn.Sequential(
+            nn.Linear(64, action_space),
+            nn.Tanh()
+        )
 
-        return action_mean, value
+        self.value_net = nn.Sequential(
+            nn.Linear(64, 1)
+        )
 
-# PPO implementation
-class PPO:
-    def __init__(self, config, policy_net):
-        self.policy_net = policy_net
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=config.lr) # lr = 1e-4
-        self.gamma = config.gamma # 0.99
-        self.clip_epsilon = config.clip_epsilon # = 0.2
-        self.value_coeff = config.value_coeff # = 0.5
-        self.entropy_coeff = config.entropy_coeff #0.01
-        self.inner_steps = config.inner_steps
-        self.batch_size = config.batch_size
-        self.device = config.device
+    def forward(self, state):
+        shared_features = self.shared_net(state)
+        shared_features = torch.flatten(shared_features, start_dim=1)
 
-    def select_action(self, env, state):
+        shared_net = F.relu(self.fc1(shared_features))
+        shared_net = F.relu(self.fc2(shared_net))
 
-        device = self.device
+        mean = self.policy_mean_net(shared_net)
+        value = self.value_net(shared_net)
+        return mean, value
 
-        state = torch.Tensor(state, dtype=torch.float32).to(device)
-        action_mean, value = self.policy_net(state)
 
-        action_prob = nn.functional.softmax(action_mean, dim=-1)
-        action_dist = torch.distributions.Categorical(action_prob)
-        action = action_dist.sample()
-        log_prob_action = action_dist.log_prob(action)
-        return action.cpu().detach(), log_prob_action, value.cpu().detach()
+class BetaPolicyNetwork(nn.Module):
+    def __init__(self, obs_space, action_space):
+        super(BetaPolicyNetwork, self).__init__()
 
-    def compute_gae(self, rewards, values, dones, next_value, gamma, lam=0.95):
-        gae = 0
-        returns = []
-        for i in reversed(range(len(rewards))):
-            delta = rewards[i] + gamma * (1 - dones[i]) * next_value - values[i]
-            gae = delta + gamma * lam * gae * (1 - dones[i])
-            returns.insert(0, gae + values[i])
-            next_value = values[i]
-        return returns
+        self.l1 = nn.Linear(obs_space, 150)
+        self.l2 = nn.Linear(150, 150)
+        self.alpha_head = nn.Linear(150, action_space)
+        self.beta_head = nn.Linear(150, action_space)
 
-    def update(self, trajectories, old_log_probs, advantages, returns):
-        states = torch.tensor(np.vstack([t[0] for t in trajectories]), dtype=torch.float32).to(self.device)
-        actions = torch.tensor(np.vstack([t[1] for t in trajectories]), dtype=torch.float32)
-        log_probs = torch.tensor(old_log_probs, dtype=torch.float32)
-        advantages = torch.tensor(advantages, dtype=torch.float32)
-        returns = torch.tensor(returns, dtype=torch.float32)
+    def forward(self, state):
+        a = torch.tanh(self.l1(state))
+        a = torch.tanh(self.l2(a))
 
-        dataset_size = states.size(0)
-        batch_iter = int(math.ceil(dataset_size / self.batch_size))
+        alpha = F.softplus(self.alpha_head(a)) + 1.0
+        beta = F.softplus(self.beta_head(a)) + 1.0
 
-        for _ in range(self.inner_steps):
-            perm = np.arange(states.shape[0])
+        return alpha, beta
+
+    def get_dist(self, state):
+        alpha, beta = self.forward(state)
+        dist = Beta(alpha, beta)
+        return dist
+
+    def deterministic_action(self, state):
+        alpha, beta = self.forward(state)
+        mode = (alpha) / (alpha + beta)
+        return mode
+
+
+class GaussianActor_musigma(nn.Module):
+    def __init__(self, obs_space, action_space):
+        super(GaussianActor_musigma, self).__init__()
+
+        self.l1 = nn.Linear(obs_space, 150)
+        self.l2 = nn.Linear(150, 150)
+        self.mu_head = nn.Linear(150, action_space)
+        self.sigma_head = nn.Linear(150, action_space)
+
+    def forward(self, state):
+        a = torch.tanh(self.l1(state))
+        a = torch.tanh(self.l2(a))
+        mu = torch.sigmoid(self.mu_head(state))
+        sigma = F.softplus(self.sigma_head(state))
+
+        return mu, sigma
+
+    def get_dist(self, state):
+        mu, sigma = self.forward(state)
+        dist = Normal(mu, sigma)
+        return dist
+
+    def deterministic_action(self, state):
+        mu, sigma = self.forward(state)
+        return mu
+
+
+class Critic(nn.Module):
+    def __init__(self, obs_space):
+        super(Critic, self).__init__()
+
+        self.C1 = nn.Linear(obs_space, 150)
+        self.C2 = nn.Linear(150, 150)
+        self.C3 = nn.Linear(150, 1)
+
+    def forward(self, state):
+        v = torch.tanh(self.C1(state))
+        v = torch.tanh(self.C2(v))
+        v = self.C3(v)
+        return v
+
+
+class PPO_agent:
+    def __init__(self, args, device, env):
+
+        self.batch_size = args.batch_size
+        self.state_dim = env.observation_space.shape[0]
+        self.action_dim = env.action_space.shape[0]
+        self.gamma = args.gamma
+        self.lam = args.lambda_
+        self.clip_epsilon = args.clip_epsilon  # clip rate
+        self.value_coeff = args.value_coeff  # critic
+        self.entropy_coeff = args.entropy_coeff  # entropy coefficient
+        self.entropy_coeff_decay = args.entropy_coeff_decay
+        self.actor_lr = args.actor_lr
+        self.critic_lr = args.critic_lr
+        self.l2_reg = args.l2_reg
+
+        self.device = device
+        self.inner_steps = args.update_timesteps
+        self.batch_size = args.batch_size
+        self.Distribution = args.Distribution
+
+        self.loss = nn.MSELoss()
+
+        self.reward_scaling = True
+        if self.reward_scaling:
+            self.running_reward_mean = 0
+            self.running_reward_std = 1
+            self.reward_count = 0
+
+        self.loss_dict = {
+            'policy_loss': [],
+            'critic_loss': [],
+            'entropy_loss': []
+        }
+
+        self.buffer = RolloutBuffer()
+
+        # Actor Distribution
+        if self.Distribution == "Beta":
+            self.actor = BetaPolicyNetwork(self.state_dim, self.action_dim).to(self.device)
+        elif self.Distribution == "Gamma_mustd":
+            self.actor = GaussianActor_musigma(self.state_dim, self.action_dim).to(self.device)
+        else:
+            print('Nonimplemented Network distribution')
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
+
+        # Critic
+        self.critic = Critic(self.state_dim).to(self.device)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.critic_lr)
+
+    def select_action(self, state, diterministic):
+        with torch.no_grad():
+            state = torch.FloatTensor(state).to(self.device)
+            self.buffer.states.append(state.cpu().numpy())
+            if diterministic:
+                a = self.actor.deterministic_action(state)
+                return a.cpu().numpy(), None
+            else:
+                dist = self.actor.get_dist(state)
+                a = dist.sample()
+                a = torch.clamp(a, 0, 1)
+                logprob_a = dist.log_prob(a).cpu().numpy()
+
+                self.buffer.actions.append(a.cpu().numpy())
+                self.buffer.logprobs.append(logprob_a)
+
+                return a.cpu().numpy(), logprob_a
+
+    def update(self):
+
+        self.entropy_coeff *= self.entropy_coeff_decay
+        s = torch.from_numpy(np.array(self.buffer.states)).to(self.device)
+        a = torch.from_numpy(np.array(self.buffer.actions)).to(self.device)
+        r = torch.from_numpy(np.array(self.buffer.rewards)).to(self.device)
+        s_next = torch.from_numpy(np.array(self.buffer.next_states)).to(self.device)
+        logprob_a = torch.from_numpy(np.array(self.buffer.logprobs)).to(self.device)
+        dones = torch.from_numpy(np.array(self.buffer.dones)).to(self.device)
+
+        if self.reward_scaling:
+            self.running_reward_mean, self.running_reward_std, self.reward_count = self.update_running_stats(r.float(), self.running_reward_mean, self.running_reward_std, self.reward_count)
+
+            r = (r - self.running_reward_mean) / (self.running_reward_std + 1e-8)
+        with torch.no_grad():
+
+            vs = self.critic(s)
+            vs_ = self.critic(s_next)
+
+            deltas = r + self.gamma * vs_ * (~dones) - vs
+            deltas = deltas.cpu().flatten().numpy()
+
+            adv = [0]
+
+            for dlt, mask in zip(deltas[::-1], dones.cpu().flatten().numpy()[::-1]):
+                advantage = dlt + self.gamma * self.lam * adv[-1] * (~mask)
+                adv.append(advantage)
+            adv.reverse()
+            adv = copy.deepcopy(adv[0:-1])
+            adv = torch.tensor(adv).unsqueeze(1).float().to(self.device)
+            td_target = adv + vs
+            adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+
+        a_optim_iter_num = int(math.ceil(s.shape[0] / self.batch_size))
+        c_optim_iter_num = int(math.ceil(s.shape[0] / self.batch_size))
+
+        a_losses, c_losses, e_losses = [], [], []
+
+        for i in range(self.inner_steps):
+
+            perm = np.arange(s.shape[0])
             np.random.shuffle(perm)
-            perm = torch.LongTensor(perm)
+            perm = torch.LongTensor(perm).to(self.device)
+            s, a, td_target, adv, logprob_a = s[perm].clone(), a[perm].clone(), td_target[perm].clone(), adv[
+                perm].clone(), logprob_a[perm].clone()
 
-            states, actions, returns, advantages, log_probs = states[perm].clone(), actions[perm].clone(), returns[perm].clone(), advantages[perm].clone(), log_probs[perm].clone()
-            for i in range(batch_iter):
-                ind = slice(i * self.batch_size, min((i+1) * self.batch_size, states.shape[0]))
-                batch_states, batch_actions, batch_advantages, batch_returns, batch_log_probs = states[ind], actions[ind], advantages[ind], returns[ind], log_probs[ind]
+            for i in range(a_optim_iter_num):
+                index = slice(i * self.batch_size, min((i + 1) * self.batch_size, s.shape[0]))
+                distribution = self.actor.get_dist(s[index])
+                dist_entropy = distribution.entropy().sum(1, keepdim=True)
+                logprob_a_next = distribution.log_prob(a[index])
+                ratio = torch.exp(logprob_a_next.sum(1, keepdims=True) - logprob_a[index].sum(1, keepdim=True))
 
-                new_action_mean, new_value = self.policy_net(batch_states)
-                new_value = new_value.cpu().detach()
-                action_prob = nn.functional.softmax(new_action_mean, dim=-1)
-                action_dist = torch.distributions.Categorical(action_prob)
-                new_log_probs = action_dist.log_prob(batch_actions.to(self.device)).cpu().detach()
+                surr1 = ratio * adv[index]
+                surr2 = torch.clamp(ratio, 1.0 - self.clip_epsilon, 1.0 + self.clip_epsilon) * adv[index]
+                e_loss = - self.entropy_coeff * dist_entropy
+                a_loss = -torch.min(surr1, surr2) + e_loss
 
-                ratio = torch.exp(new_log_probs - batch_log_probs)
+                a_losses.append(a_loss.mean().detach().cpu().item())
+                e_losses.append(e_loss.mean().detach().cpu().item())
 
-                # Policy loss
-                surrogate_1 = ratio * batch_advantages
-                surrogate_2 = torch.clamp(ratio, 1.0 - self.clip_epsilon, 1.0 + self.clip_epsilon) * batch_advantages
-                policy_loss = -torch.min(surrogate_1, surrogate_2).mean()
+                self.actor_optimizer.zero_grad()
+                a_loss.mean().backward()
+                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 40)
+                self.actor_optimizer.step()
 
-                # Value loss
-                value_loss = self.value_coeff * ((batch_returns - new_value).pow(2)).mean()
+            for i in range(c_optim_iter_num):
+                index = slice(i * self.batch_size, min((i + 1) * self.batch_size, s.shape[0]))
+                c_loss = (self.critic(s[index]) - td_target[index]).pow(2).mean()
+                for name, param in self.critic.named_parameters():
+                    if 'weight' in name:
+                        c_loss += param.pow(2).sum() * self.l2_reg
 
-                # Entropy loss for exploration
-                entropy_loss = -self.entropy_coeff * action_dist.entropy().mean()
+                c_losses.append(c_loss.detach().cpu().item())
 
-                # Total loss
-                loss = policy_loss + value_loss + entropy_loss
+                self.critic_optimizer.zero_grad()
+                c_loss.backward()
+                self.critic_optimizer.step()
 
-                # Gradient descent step
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
+        self.buffer.clear()
 
-class MetaPPO(PPO):
-    def __init__(self, local_policy_nets, env, config, batch_size):
-        self.env = env
-        self.config = config
-        self.local_policy_nets = local_policy_nets
-        self.lr = self.config.lr
-        self.gamma = self.config.gamma
-        self.clip_epsilon = self.config.clip_epsilon
-        self.value_coeff = self.config.value_coeff
-        self.entropy_coeff = self.config.entropy_coeff
-        self.batch_size = batch_size
-        self.lam = self.config.lambda_
+        return np.array(a_losses).mean(), np.array(c_losses).mean(), np.array(e_losses).mean()
+
+    def save(self, episode):
+        torch.save(self.actor.state_dict(), "./out/{}_actor.pth".format(episode))
+        torch.save(self.critic.state_dict(), "./out/{}_critic.pth".format(episode))
+
+    def load(self, episode):
+        self.actor.load_state_dict(torch.load("./out/{}_actor.pth".format(episode)))
+        self.critic.load_state_dict(torch.load("./out/{}_critic.pth".format(episode)))
+
+    def update_running_stats(self, x, running_mean, running_std, count):
+        """Calculates running mean and std."""
+        batch_mean = torch.mean(x)
+        batch_var = torch.var(x)
+        batch_size = x.shape[0]
+
+        delta = batch_mean - running_mean
+        total_count = count + batch_size
+        new_mean = running_mean + delta * batch_size / total_count
+
+        m_a = running_std ** 2 * count
+        m_b = batch_var * batch_size
+        M2 = m_a + m_b + delta ** 2 * count * batch_size / total_count
+        new_std = torch.sqrt(M2 / total_count)
+
+        return new_mean, new_std, total_count
+
+def adapt_to_task(state, ppo, factor, env, device, episode):
+    env_update = False
+    done = False
+
+    while not done:
+
+        action, _ = ppo.select_action(state, diterministic=False)
+        action_with_factor = (action, factor, env_update, False)
+
+        next_state, reward, done, terminate, info = env.step(action_with_factor)
+
+        ppo.buffer.rewards.append(reward)
+        ppo.buffer.dones.append(done)
+        ppo.buffer.next_states.append(next_state)
+
+        state = next_state
+
+        if done:
+            if episode ==0:
+                policy_loss, critic_loss, entropy_loss = ppo.update()
+                ppo.loss_dict['policy_loss'].append(policy_loss)
+                ppo.loss_dict['critic_loss'].append(critic_loss)
+                ppo.loss_dict['entropy_loss'].append(entropy_loss)
+                return ppo.actor
+            if sum(ppo.buffer.rewards) > -1000:
+                policy_loss, critic_loss, entropy_loss = ppo.update()
+                ppo.loss_dict['policy_loss'].append(policy_loss)
+                ppo.loss_dict['critic_loss'].append(critic_loss)
+                ppo.loss_dict['entropy_loss'].append(entropy_loss)
+                return ppo.actor
+            else:
+                ppo.loss_dict['policy_loss'].append(ppo.loss_dict['policy_loss'][-1])
+                ppo.loss_dict['critic_loss'].append(ppo.loss_dict['critic_loss'][-1])
+                ppo.loss_dict['entropy_loss'].append(ppo.loss_dict['entropy_loss'][-1])
+                ppo.buffer.clear()
+                return ppo.actor
 
 
-    def adapt_to_task(self, local_policy_net, env, initial_observation, factors, inner_steps=10, timesteps = 100):
-        """
-        Perform inner-loop adaptation on a specific criteria from three criteria (e.g., environment, economic, urbanity) using a local learner.
 
-        """
+def moving_average(data, window_size=10):
+    if len(data) < window_size:
+        return np.array(data)
+    return np.convolve(data, np.ones(window_size) / window_size, 'valid')
 
-        ppo = PPO(self.config, local_policy_net)
 
-        # Gather experience and train on the task
-        trajectories, old_log_probs, rewards, values, dones = self.rollout(local_policy_net, env, initial_observation, ppo, factors, timesteps)
-        returns = ppo.compute_gae(rewards, values, dones, values[-1], self.gamma, self.lam)
-        advantages = np.array(returns) - np.array(values)
+def result_plot(args, epi_rewards_list, average_rewards_list, episode, factor):
+    moving_rewards = moving_average(epi_rewards_list, window_size=10)
 
-        for _ in range(inner_steps):
-            ppo.update(trajectories, old_log_probs, advantages, returns)
+    episodes = np.arange(1, len(epi_rewards_list) + 1)
 
-        return local_policy_net
+    plt.figure()
+    plt.plot(episodes, epi_rewards_list, label='Episode Reward', alpha=0.4)
+    plt.plot(episodes[:len(moving_rewards)], moving_rewards, label='Moving average', linewidth=2)
+    plt.title('Episode_{} {} Rewards'.format(episode, factor))
+    plt.xlabel('Episode')
+    plt.ylabel('Total Reward')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(args.reward_folder + '/test/{}_rewards.png'.format(factor))
+    plt.close()
 
-    def meta_adapt_to_task(self, meta_global_policy_net, env, initial_observation, factors=None, inner_steps=10, timesteps = 100):
-        """
-        Perform inner-loop adaptation on a specific criteria from three criteria (e.g., environment, economic, urbanity) using a local learner.
+    moving_average_rewards = moving_average(average_rewards_list, window_size=10)
+    plt.figure()
+    plt.plot(episodes, average_rewards_list, label='Episode average Reward', alpha=0.4)
+    plt.plot(episodes[:len(moving_average_rewards)], moving_average_rewards, label='Moving average', linewidth=2)
+    plt.title('Episode_{} {} average Rewards'.format(episode, factor))
+    plt.xlabel('Episode')
+    plt.ylabel('Average Reward')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(args.reward_folder + '/test/{}_average_rewards.png'.format(factor))
+    plt.close()
 
-        """
 
-        ppo = PPO(self.config, meta_global_policy_net)
+def loss_plot(args, loss_dict, episode, factor):
+    policy_loss = loss_dict['policy_loss']
+    critic_loss = loss_dict['critic_loss']
+    entropy_loss = loss_dict['entropy_loss']
 
-        # Gather experience and train on the task
-        trajectories, old_log_probs, rewards, values, dones = self.rollout(meta_global_policy_net, env, initial_observation, ppo, factors, timesteps)
-        returns = ppo.compute_gae(rewards, values, dones, values[-1], self.gamma, self.lam)
-        advantages = np.array(returns) - np.array(values)
+    plt.figure()
+    plt.plot(policy_loss, label='Episode Policy Loss')
+    plt.title('{} policy loss in  Episode_{}'.format(factor, episode))
+    plt.xlabel('Episode')
+    plt.ylabel('Loss')
+    plt.savefig(args.reward_folder + '/test/{}_loss.png'.format(factor))
+    plt.close()
 
-        for _ in range(inner_steps):
-            ppo.update(trajectories, old_log_probs, advantages, returns)
+    plt.figure()
+    plt.plot(critic_loss, label='Episode Critic Loss')
+    plt.title('{} critic loss in  Episode_{}'.format(factor, episode))
+    plt.xlabel('Episode')
+    plt.ylabel('Loss')
+    plt.savefig(args.reward_folder + '/test/{}_critic_loss.png'.format(factor))
+    plt.close()
 
-        next_initial_position, next_initial_observation = env.reset()
+    plt.figure()
+    plt.plot(entropy_loss, label='Episode Entropy Loss')
+    plt.title('{} entropy loss in  Episode_{}'.format(factor, episode))
+    plt.xlabel('Episode')
+    plt.ylabel('Loss')
+    plt.savefig(args.reward_folder + '/test/{}_entropy_loss.png'.format(factor))
+    plt.close()
 
-        return meta_global_policy_net, returns, next_initial_position, next_initial_observation
 
-    def aggregat_local_to_meta_global(self, meta_global_policy_net):
-        """
-        Aggregate parameters from local learners to update the global meta-learner using weighted MAML.
-        """
-        # Initialize parameter aggregation
-        global_params = OrderedDict(meta_global_policy_net.named_parameters())
-        for name, param in global_params.items():
-            param.data.copy_(torch.zeros_like(param.data))
+def aggregate_local_to_global(local_policy_nets, global_policy_net):
+    global_parms = OrderedDict()
 
-        # Aggregate parameters from local adapted policies
-        for local_policy in self.local_policy_nets:
-            local_params = local_policy.named_parameters()
-            for (name, param), (_, local_param) in zip(global_params.items(), local_params):
-                param.data += local_param.data
+    for name, param in global_policy_net.named_parameters():
+        global_parms[name] = param.clone().detach()
 
-        # Normalize aggregated parameters by the number of local networks
-        for name, param in global_params.items():
-            param.data /= len(self.local_policy_nets)
+    for param in global_parms.values():
+        param.zero_()
 
-        return meta_global_policy_net.load_state_dict(global_params)
+    with torch.no_grad():
+        for local_net in local_policy_nets:
+            for (name, local_param) in local_net.named_parameters():
+                global_parms[name] += local_param.detach()
 
-    def reduce_and_broadcast(self, meta_global_policy_net, global_of_global_policy):
-        """
-        Share parameters between meta-global policy nets from all workers and update the global_of_global policy through reduce and broadcast collective communications in Pytorch.
-        In more detail, each meta-global policy net's parameters is aggregated to global_of_global policy net by averaging those parameters from all workers through the reduce technique.
-        Aggregated parameter in global_of_global policy net is broadcasted to all workers that all meta-global policy nets in workers gets all same parameters with global_of_global policy.
-        """
+        num_nets = len(local_policy_nets)
+        for name in global_parms:
+            global_parms[name] /= num_nets
 
-        global_params = OrderedDict(meta_global_policy_net.named_parameters())
-        global_of_global_params = OrderedDict(global_of_global_policy.named_parameters())
+    global_policy_net.load_state_dict(global_parms)
 
-        # Initialize global_of_global with zeros
-        for name, param in global_params.items():
-            param.data.copy_(torch.zeros_like(param.data))
+    return global_policy_net
 
-        # Reduce meta_global_policy net across all workers into global_of_global policy
-        for name, param in global_params.items():
-            dist.reduce(param.data, op=dist.ReduceOp.SUM)
-            param.data /= dist.get_world_size()
 
-        # Update global_of_global_policy with reduced parameters
-        global_of_global_policy.load_state_dict(global_params)
+def test(state, ppo, network, local_ppos, factor, env, episode, args, average_reward_list, system=False):
+    done = False
 
-        # Broadcast updated parameters to all workers' global policies
-        for param in global_of_global_policy.parameters():
-            dist.broadcast(param.data, src=0) # Broadcast from rank 0
+    ppo.local_policy_net = aggregate_local_to_global(local_ppos, network)
 
-    def rollout(self, policy_net, env, initial_observation, ppo, factor, timesteps):
-        """
-        Rollout one time to collect data for each factor using the given policy network
-        """
+    with torch.no_grad():
+        while not done:
 
-        trajectories = []
-        rewards = []
-        values = []
-        dones = []
-        old_log_probs = []
-        infos = {}
-        total_reward = 0
-        state = initial_observation
-        for _ in range(timesteps):
-            action, log_prob = ppo.select_action(env, state)
-            next_state, reward, done, info = env.step(action.item(), state, factor)
-            _, value = policy_net(torch.tensor(state), dtype=torch.float32)
-            trajectories.append((state, action))
-            rewards.append(reward)
-            values.append(value.item())
-            dones.append(done)
-            old_log_probs.append(log_prob.item())
-            total_reward += reward
-            infos.update(info)
-            if not done:
-                state = next_state
+            action, _ = ppo.select_action(state, diterministic=False)
+            action_with_factor = (action, factor, system, False)
 
-        return trajectories, old_log_probs, rewards, values, dones, total_reward, infos
+            next_state, reward, done, terminate, info = env.step(action_with_factor)
 
-    def plot(self, individual_rewards, average_rewards, global_rewards, episode):
-        plt.figure()
-        for i in range(3):
-            plt.plot(individual_rewards[i], label=f'worker {i + 1}')
-        plt.plot(average_rewards, label='Average reward of meta policies', color='red', linestyle='--')
-        plt.plot(global_rewards, label='Global reward', color='purple', linestyle='--')
-        plt.title(f'Rewards up to episode {episode}')
-        plt.xlabel('Episode')
-        plt.ylabel('Total Reward')
-        plt.legend()
-        plt.show()
+            ppo.buffer.states.append(next_state)
+            ppo.buffer.rewards.append(reward)
+            ppo.buffer.dones.append(env.converted_action)
+
+            for k, v in info.items():
+                ppo.buffer.infos.setdefault(k, []).append(v)
+
+            state = next_state
+
+            if done:
+
+                total_rewards = sum(ppo.buffer.rewards)
+                average_rewards = total_rewards / len(ppo.buffer.rewards)
+
+                baseline = sum(average_reward_list) / len(average_reward_list) if len(average_reward_list) > 0 else 0
+
+                if average_rewards >= baseline:
+
+                    folder_path = args.reward_folder
+                    os.makedirs(folder_path, exist_ok=True)
+
+                    file_name = 'system_{}_trajectory_{}_episode.csv'.format(factor, episode)
+                    file_path = os.path.join(folder_path, file_name)
+
+                    with open(file_path, mode='w', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow(['step reward', 'x_extent', 'y_extent', 'capacity'])
+                        for total_reward, actions in zip(ppo.buffer.rewards, ppo.buffer.dones):
+                            row = [total_reward] + actions.tolist()
+                            writer.writerow(row)
+
+                    print("Find new solution in the system model")
+
+        if system:
+            last_info = [v[-1] for v in ppo.buffer.infos.values()]
+        else:
+            last_info = 0
+
+        ppo.buffer.clear()
+
+        return reward, total_rewards, average_rewards, last_info
+
+
+def evaluate(state, ppo, factor, env, episode, args, average_reward_list, env_update=False):
+    done = False
+
+    with torch.no_grad():
+        while not done:
+
+            action, _ = ppo.select_action(state, diterministic=False)
+            action_with_factor = (action, factor, env_update, False)
+
+            next_state, reward, done, terminate, info = env.step(action_with_factor)
+
+            ppo.buffer.states.append(next_state)
+            ppo.buffer.rewards.append(reward)
+            ppo.buffer.actions.append(env.converted_action)
+
+            for k, v in info.items():
+                ppo.buffer.infos.setdefault(k, []).append(v)
+
+            state = next_state
+
+            if done:
+
+                total_rewards = sum(ppo.buffer.rewards)
+                average_rewards = total_rewards / len(ppo.buffer.rewards)
+                baseline = sum(average_reward_list) / len(average_reward_list) if len(average_reward_list) > 0 else 0
+
+                if average_rewards >= baseline:
+
+                    folder_path = args.reward_folder
+                    os.makedirs(folder_path, exist_ok=True)
+
+                    file_name = 'overall_{}_trajectory_{}_episode.csv'.format(factor, episode)
+                    file_path = os.path.join(folder_path, file_name)
+
+                    with open(file_path, mode='w', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow(['step reward', 'x_extent', 'y_extent', 'capacity'])
+                        for total_reward, actions in zip(ppo.buffer.rewards, ppo.buffer.actions):
+                            row = [total_reward] + actions.tolist()
+                            writer.writerow(row)
+
+                    print("Find new solution in the {} model".format(factor))
+
+        if env_update or factor == "system":
+            last_info = [v[-1] for v in ppo.buffer.infos.values()]
+        else:
+            last_info = 0
+
+        ppo.buffer.clear()
+
+        return reward, total_rewards, average_rewards, last_info
+
+
+class RolloutBuffer:
+    def __init__(self):
+        self.states = []
+        self.actions = []
+        self.logprobs = []
+        self.values = []
+        self.dones = []
+        self.rewards = []
+        self.next_states = []
+        self.infos = {}
+
+    def clear(self):
+        del self.states[:]
+        del self.actions[:]
+        del self.logprobs[:]
+        del self.values[:]
+        del self.dones[:]
+        del self.rewards[:]
+        del self.next_states[:]
+        self.infos.clear()
+

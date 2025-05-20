@@ -1,9 +1,6 @@
 from ppo.agent_v3 import PolicyNetwork
 from ppo.train_v3 import train
 
-from a2c.model import PolicyNetwork
-from a2c.train import train
-
 from utils.build import argument
 import torch
 import gymnasium as gym
@@ -19,16 +16,17 @@ def main():
     args = argument()
 
     # Global shared policy network
+    system_policy_net = PolicyNetwork(env.observation_space.shape[0],  env.action_space.shape[0]).to(device)
     global_policy_net = PolicyNetwork(env.observation_space.shape[0],  env.action_space.shape[0]).to(device)
     local_policy_nets = [
         PolicyNetwork(env.observation_space.shape[0], env.action_space.shape[0]).to(device)
         for _ in range(3)
     ]
 
-    world_size = 3
+    world_size = 5
 
     train_ = train()
-    train_.train(global_policy_net, local_policy_nets, device, world_size, args, env)
+    train_.train(system_policy_net, global_policy_net, local_policy_nets, device, world_size, args, env)
 
     '''
         world_size = 3

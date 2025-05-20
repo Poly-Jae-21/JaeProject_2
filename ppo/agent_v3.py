@@ -1,3 +1,5 @@
+import copy
+import csv
 import math
 import torch
 import torch.nn as nn
@@ -5,11 +7,11 @@ import torch.nn.functional as F
 import torch.optim as optim
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 
 from collections import OrderedDict
 
-from main_v5 import reward
-
+from torch.distributions import Beta, Normal
 
 class CNNPolicyNetwork(nn.Module):
     def __init__(self, obs_space, action_space):
@@ -46,6 +48,74 @@ class CNNPolicyNetwork(nn.Module):
         value = self.value_net(shared_net)
         return mean, value
 
+class BetaPolicyNetwork(nn.Module):
+    def __init__(self, obs_space, action_space):
+        super(BetaPolicyNetwork, self).__init__()
+
+        self.l1 = nn.Linear(obs_space, 150)
+        self.l2 = nn.Linear(150, 150)
+        self.alpha_head = nn.Linear(150, action_space)
+        self.beta_head = nn.Linear(150, action_space)
+
+    def forward(self, state):
+        a = torch.tanh(self.l1(state))
+        a = torch.tanh(self.l2(a))
+
+        alpha = F.softplus(self.alpha_head(a)) + 1.0
+        beta = F.softplus(self.beta_head(a)) + 1.0
+
+        return alpha, beta
+
+    def get_dist(self, state):
+        alpha, beta = self.forward(state)
+        dist = Beta(alpha, beta)
+        return dist
+
+    def deterministic_action(self, state):
+        alpha, beta = self.forward(state)
+        mode = (alpha) / (alpha + beta)
+        return mode
+
+class GaussianActor_musigma(nn.Module):
+    def __init__(self, obs_space, action_space):
+        super(GaussianActor_musigma, self).__init__()
+
+        self.l1 = nn.Linear(obs_space, 150)
+        self.l2 = nn.Linear(150, 150)
+        self.mu_head = nn.Linear(150, action_space)
+        self.sigma_head = nn.Linear(150, action_space)
+
+    def forward(self, state):
+        a = torch.tanh(self.l1(state))
+        a = torch.tanh(self.l2(a))
+        mu = torch.sigmoid(self.mu_head(state))
+        sigma = F.softplus(self.sigma_head(state))
+
+        return mu, sigma
+
+    def get_dist(self, state):
+        mu, sigma = self.forward(state)
+        dist = Normal(mu, sigma)
+        return dist
+
+    def deterministic_action(self, state):
+        mu, sigma = self.forward(state)
+        return mu
+
+class Critic(nn.Module):
+    def __init__(self, obs_space):
+        super(Critic, self).__init__()
+
+        self.C1 = nn.Linear(obs_space, 150)
+        self.C2 = nn.Linear(150, 150)
+        self.C3 = nn.Linear(150, 1)
+
+    def forward(self, state):
+        v = torch.tanh(self.C1(state))
+        v = torch.tanh(self.C2(v))
+        v = self.C3(v)
+        return v
+
 class PolicyNetwork(nn.Module):
     def __init__(self, obs_space, action_space):
         super(PolicyNetwork, self).__init__()
@@ -74,23 +144,39 @@ class PolicyNetwork(nn.Module):
         return mean, value
 
 class PPO:
-    def __init__(self, args, device, local_policy_net, cov_mat):
-        self.local_policy_net = local_policy_net
-        #self.optimizer = optim.Adam(self.local_policy_net.parameters(), lr=args.lr)
-        self.optimizer = optim.RMSprop(self.local_policy_net.parameters(), lr=args.lr)
+    def __init__(self, args, device, local_policy_net):
+
         self.gamma = args.gamma
-        self.clip_epsilon = args.clip_epsilon
-        self.value_coeff = args.value_coeff
-        self.entropy_coeff = args.entropy_coeff
+        self.clip_epsilon = args.clip_epsilon #clip rate
+        self.value_coeff = args.value_coeff # critic
+        self.entropy_coeff = args.entropy_coeff # entropy coefficient
+        self.entropy_coeff_decay = args.entropy_coeff_decay
+        self.actor_lr = args.actor_lr
+        self.critic_lr = args.critic_lr
+        self.l2_reg = args.l2_reg
+
         self.inner_steps = args.update_timesteps
         self.batch_size = args.batch_size
         self.device = device
-        self.cov_mat = cov_mat
+        self.lam = args.lambda_
+
+        self.cov_var = torch.full(size=(1, 3), fill_value=0.5).to(device)
+        self.cov_mat = torch.diag(self.cov_var)
+
         self.max_grad_norm = 1.0
 
         self.buffer = RolloutBuffer()
 
-        self.loss = None
+        self.local_policy_net = local_policy_net
+        self.optimizer = optim.Adam(self.local_policy_net.parameters(), lr=args.lr)
+
+        self.loss = nn.MSELoss()
+
+        self.loss_dict = {
+            'policy_loss': [],
+            'critic_loss': [],
+            'entropy_loss': []
+        }
 
     def select_action(self, state):
         state = torch.Tensor(state).to(self.device)
@@ -108,11 +194,14 @@ class PPO:
 
         return sampled_actions.cpu().detach()
 
-    def compute_gae(self, gamma, lam=0.95):
+    def compute_gae(self, gamma=0.99, lamda=0.95):
 
         rewards = self.buffer.rewards
         values = self.buffer.values
         dones = self.buffer.dones
+
+        gamma = self.gamma
+        lam = self.lam
 
         gae = 0
         returns = []
@@ -138,6 +227,8 @@ class PPO:
 
         dataset_size = old_states.size(0)
         batch_iter = int(math.ceil(dataset_size / self.batch_size))
+
+        policy_losses, critic_losses, entropy_losses = [], [], []
 
         for _ in range(self.inner_steps):
             '''
@@ -180,8 +271,6 @@ class PPO:
 
                 new_value = new_value.squeeze()
 
-                assert not torch.isnan(new_action_mean).any(), "mean contains NaN"
-
                 dist = torch.distributions.Normal(new_action_mean, self.cov_mat)
 
                 sampled_actions = dist.rsample()
@@ -206,7 +295,9 @@ class PPO:
                 # Total loss
                 loss = policy_loss + value_loss + entropy_loss
 
-                assert not torch.isnan(loss).any(), "Loss contains Nan"
+                policy_losses.append(policy_loss)
+                critic_losses.append(value_loss)
+                entropy_losses.append(entropy_loss)
 
                 # Gradient descent step
 
@@ -214,7 +305,7 @@ class PPO:
 
                 loss.backward()
 
-                #torch.nn.utils.clip_grad_norm_(self.local_policy_net.parameters(), self.max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(self.local_policy_net.parameters(), max_norm=0.5)
 
                 self.optimizer.step()
                 self.loss = loss
@@ -222,11 +313,242 @@ class PPO:
 
         self.buffer.clear()
 
+        return policy_losses[-1], critic_losses[-1], entropy_losses[-1]
+
     def loss_value(self):
         return self.loss
 
+def adapt_to_task(state, ppo, factor, env, episode, device):
+
+    env_update = False
+    done = False
+
+    while not done:
+
+        action = ppo.select_action(state)
+        action_with_factor = (action.numpy().ravel(), factor, env_update, False)
+
+        next_state, reward, done, terminate, info = env.step(action_with_factor)
+
+        ppo.buffer.rewards.append(reward)
+        ppo.buffer.dones.append(done)
+
+        state = next_state
+
+        if done:
+            _, next_value = ppo.local_policy_net(torch.Tensor(state).to(device))
+            ppo.buffer.values.append(next_value.cpu().detach())
+            returns = ppo.compute_gae(gamma=0.99, lamda=0.95)
+
+            policy_loss, critic_loss, entropy_loss = ppo.update(returns)
+
+            ppo.loss_dict['policy_loss'].append(policy_loss)
+            ppo.loss_dict['critic_loss'].append(critic_loss)
+            ppo.loss_dict['entropy_loss'].append(entropy_loss)
+
+            return ppo.local_policy_net
+
+def moving_average(data, window_size=10):
+    if len(data) < window_size:
+        return np.array(data)
+    return np.convolve(data, np.ones(window_size) / window_size, 'valid')
+
+def result_plot(args, epi_rewards_list, average_rewards_list, episode, factor):
+
+    moving_rewards = moving_average(epi_rewards_list, window_size=10)
+
+    episodes = np.arange(1, len(epi_rewards_list) + 1)
+
+    plt.figure()
+    plt.plot(episodes, epi_rewards_list, label='Episode Reward', alpha=0.4)
+    plt.plot(episodes[:len(moving_rewards)], moving_rewards, label='Moving average', linewidth=2)
+    plt.title('Episode_{} {} Rewards'.format(episode, factor))
+    plt.xlabel('Episode')
+    plt.ylabel('Total Reward')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(args.reward_folder + '/test/{}_rewards.png'.format(factor))
+    plt.close()
+
+    moving_average_rewards = moving_average(average_rewards_list, window_size=10)
+    plt.figure()
+    plt.plot(episodes, average_rewards_list, label='Episode average Reward', alpha=0.4)
+    plt.plot(episodes[:len(moving_average_rewards)], moving_average_rewards, label='Moving average', linewidth=2)
+    plt.title('Episode_{} {} average Rewards'.format(episode, factor))
+    plt.xlabel('Episode')
+    plt.ylabel('Average Reward')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(args.reward_folder + '/test/{}_average_rewards.png'.format(factor))
+    plt.close()
+
+def loss_plot(args, loss_dict, episode, factor):
+
+    policy_loss = [t.cpu().item() if t.numel() == 1 else t.cpu().numpy() for t in loss_dict['policy_loss']]
+    critic_loss = [t.cpu().item() if t.numel() == 1 else t.cpu().numpy() for t in loss_dict['critic_loss']]
+    entropy_loss = [t.cpu().item() if t.numel() == 1 else t.cpu().numpy() for t in loss_dict['entropy_loss']]
+
+    plt.figure()
+    plt.plot(policy_loss, label='Episode Policy Loss')
+    plt.title('{} policy loss in  Episode_{}'.format(factor, episode))
+    plt.xlabel('Episode')
+    plt.ylabel('Loss')
+    plt.savefig(args.reward_folder + '/test/{}_loss.png'.format(factor))
+    plt.close()
+
+    plt.figure()
+    plt.plot(critic_loss, label='Episode Critic Loss')
+    plt.title('{} critic loss in  Episode_{}'.format(factor, episode))
+    plt.xlabel('Episode')
+    plt.ylabel('Loss')
+    plt.savefig(args.reward_folder + '/test/{}_critic_loss.png'.format(factor))
+    plt.close()
+
+    plt.figure()
+    plt.plot(entropy_loss, label='Episode Entropy Loss')
+    plt.title('{} entropy loss in  Episode_{}'.format(factor, episode))
+    plt.xlabel('Episode')
+    plt.ylabel('Loss')
+    plt.savefig(args.reward_folder + '/test/{}_entropy_loss.png'.format(factor))
+    plt.close()
+
+def aggregate_local_to_global(local_policy_nets, global_policy_net):
+    global_parms = OrderedDict()
+
+    for name, param in global_policy_net.named_parameters():
+        global_parms[name] = param.clone().detach()
+
+    for param in global_parms.values():
+        param.zero_()
+
+    with torch.no_grad():
+        for local_net in local_policy_nets:
+            for (name, local_param) in local_net.named_parameters():
+                global_parms[name] += local_param.detach()
+
+        num_nets = len(local_policy_nets)
+        for name in global_parms:
+            global_parms[name] /= num_nets
+
+
+    global_policy_net.load_state_dict(global_parms)
+
+    return global_policy_net
+
+def test(state, ppo, network, local_ppos, factor, env, episode, args, average_reward_list, system=False):
+    done = False
+
+    ppo.local_policy_net = aggregate_local_to_global(local_ppos, network)
+
+    with torch.no_grad():
+        while not done:
+
+            action = ppo.select_action(state)
+            action_with_factor = (action.numpy().ravel(), factor, system, False)
+
+            next_state, reward, done, terminate, info = env.step(action_with_factor)
+
+            ppo.buffer.states.append(next_state)
+            ppo.buffer.rewards.append(reward)
+            ppo.buffer.dones.append(env.converted_action)
+
+            for k, v in info.items():
+                ppo.buffer.infos.setdefault(k, []).append(v)
+
+            state = next_state
+
+            if done:
+
+                total_rewards = sum(ppo.buffer.rewards)
+                average_rewards = total_rewards / len(ppo.buffer.rewards)
+
+                baseline = sum(average_reward_list) / len(average_reward_list) if len(average_reward_list) > 0 else 0
+
+                if average_rewards >= baseline:
+
+                    folder_path = args.reward_folder
+                    os.makedirs(folder_path, exist_ok=True)
+
+                    file_name = '_{}_trajectory_{}_episode.csv'.format(factor, episode)
+                    file_path = os.path.join(folder_path, file_name)
+
+                    with open(file_path, mode='w', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow(['step reward', 'x_extent', 'y_extent', 'capacity'])
+                        for total_reward, actions in zip(ppo.buffer.rewards, ppo.buffer.dones):
+                            row = [total_reward] + actions
+                            writer.writerow(row)
+
+                    print("Find new solution in the system model")
+
+        if system:
+            last_info = [v[-1] for v in ppo.buffer.infos.values()]
+        else:
+            last_info = 0
+
+        ppo.buffer.clear()
+
+        return reward, total_rewards, average_rewards, last_info
+
+
+def evaluate(state, ppo, factor, env, episode, args, average_reward_list, env_update=False):
+
+    done = False
+
+    with torch.no_grad():
+        while not done:
+
+            action = ppo.select_action(state)
+            action_with_factor = (action.numpy().ravel(), factor, env_update, False)
+
+            next_state, reward, done, terminate, info = env.step(action_with_factor)
+
+            ppo.buffer.states.append(next_state)
+            ppo.buffer.rewards.append(reward)
+            ppo.buffer.dones.append(env.converted_action)
+
+            for k, v in info.items():
+                ppo.buffer.infos.setdefault(k, []).append(v)
+
+            state = next_state
+
+            if done:
+
+                total_rewards = sum(ppo.buffer.rewards)
+                average_rewards = total_rewards / len(ppo.buffer.rewards)
+                baseline = sum(average_reward_list) / len(average_reward_list) if len(average_reward_list) > 0 else 0
+
+                if average_rewards >= baseline:
+
+                    folder_path = args.reward_folder
+                    os.makedirs(folder_path, exist_ok=True)
+
+                    file_name = '_{}_trajectory_{}_episode.csv'.format(factor, episode)
+                    file_path = os.path.join(folder_path, file_name)
+
+                    with open(file_path, mode='w', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow(['step reward', 'x_extent', 'y_extent', 'capacity'])
+                        for total_reward, actions in zip(ppo.buffer.rewards, ppo.buffer.dones):
+                            row = [total_reward] + actions
+                            writer.writerow(row)
+
+                    print("Find new solution in the {} model".format(factor))
+
+        if env_update or factor == "system":
+            last_info = [v[-1] for v in ppo.buffer.infos.values()]
+        else:
+            last_info = 0
+
+        ppo.buffer.clear()
+
+        return reward, total_rewards, average_rewards, last_info
+
 class MetaPPO(PPO):
-    def __init__(self, device, env, args, local_nets, batch_size=32):
+    def __init__(self, device, env, args, local_nets, local_policy_net, batch_size=32):
+        super().__init__(args, device, local_policy_net)
         self.env = env
         self.args = args
 
@@ -240,18 +562,10 @@ class MetaPPO(PPO):
         self.device = device
         self.terminate = False
 
-        self.cov_var = torch.full(size=(1,3), fill_value=0.1).to(device)
-        self.cov_mat = torch.diag(self.cov_var)
-
-        self.local_policy_nets = {
-            'policy': local_nets['policy'],
-            'critic': local_nets['critic']
-        }
-
         self.loss_dict = {
-            'policy_loss': None,
-            'critic_loss': None,
-            'entropy_loss': None
+            'policy_loss': [],
+            'critic_loss': [],
+            'entropy_loss': []
         }
 
     def adapt_to_task(self, args, local_policy_net, env, initial_observation, factor, episode):
@@ -259,7 +573,7 @@ class MetaPPO(PPO):
         env_update = False
         done = False
 
-        ppo = PPO(args, self.device, local_policy_net, self.cov_mat)
+        ppo = PPO(args, self.device, local_policy_net)
 
         while not done:
             action = ppo.select_action(initial_observation)
@@ -267,7 +581,7 @@ class MetaPPO(PPO):
 
             next_state, reward, done, terminate, info = env.step(action_with_factor)
 
-            ppo.buffer.next_states.append(next_state)
+            ppo.buffer.states.append(next_state)
             ppo.buffer.rewards.append(reward)
 
             self.terminate = terminate
@@ -373,19 +687,6 @@ class MetaPPO(PPO):
                 _, next_value = ppo.local_policy_net(torch.Tensor(next_state).to(self.device))
                 ppo.buffer.values.append(next_value.cpu().detach())
 
-
-    def plot(self, epi_rewards_list, average_rewards_list, episode, factor):
-        plt.figure()
-        #plt.plot(epi_rewards_list, label='Episode total Rewards')
-        plt.plot(average_rewards_list, label='Average {} Rewards'.format(factor))
-        plt.title('Episode_{} {} Rewards'.format(episode, factor))
-        plt.xlabel('Episode')
-        plt.ylabel('Episode average Rewards')
-        plt.legend()
-        plt.savefig(self.args.reward_folder + '/test/{}_rewards.png'.format(factor))
-        plt.close()
-
-
 class RolloutBuffer:
     def __init__(self):
         self.states = []
@@ -394,6 +695,7 @@ class RolloutBuffer:
         self.values = []
         self.dones = []
         self.rewards = []
+        self.next_states = []
         self.infos = {}
 
     def clear(self):
@@ -403,6 +705,7 @@ class RolloutBuffer:
         del self.values[:]
         del self.dones[:]
         del self.rewards[:]
+        del self.next_states[:]
         self.infos.clear()
 
 

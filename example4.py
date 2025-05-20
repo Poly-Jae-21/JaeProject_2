@@ -1,6 +1,2 @@
-import numpy as np
-
-a = [1, 2, 3]
-b = [4, 5, 6]
-c = (np.array(a) + np.array(b)) / 2
-print(c)
+info = {'a': 1, 'b': 2, 'c': 3}
+print(info["a"])

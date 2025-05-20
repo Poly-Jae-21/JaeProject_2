@@ -45,11 +45,16 @@ def argument():
 
     parser.add_argument('--entropy_beta', type=float, default=1e-3, help='entropy beta')
 
-    parser.add_argument('--lr', type=float, default=0.00001, help='learning rate (default: 1e-4)')
+    parser.add_argument('--lr', type=float, default=5e-5, help='learning rate (default: 1e-4)')
     parser.add_argument('--clip_epsilon', type=float, default=0.2, help='clipping parameter (default: 0.2)')
     parser.add_argument('--value_coeff', type=float, default=0.5, help='value coefficient (default: 0.5)')
-    parser.add_argument('--entropy_coeff', type=float, default=0.01, help='entropy coefficient (default: 0.01)')
+    parser.add_argument('--entropy_coeff', type=float, default=0.05, help='entropy coefficient (default: 0.01)')
+    parser.add_argument("--entropy_coeff_decay", type=float, default=0.99, help='Decay rate of entropy_coef')
     parser.add_argument('--momentum', type=float, default=0.9, help='SGD momentum (default: 0.9)')
+    parser.add_argument('--actor_lr', type=float, default=2e-4, help='learning rate of actor (default: 1e-4)')
+    parser.add_argument('--critic_lr', type=float, default=5e-5, help='learning rate of critic (default: 1e-4)')
+    parser.add_argument('--l2_reg', type=float, default=1e-3, help='L2 regularization coefficient for critic')
+    parser.add_argument('--Distribution', type=str, default='Beta', help='Distribution type (Beta, Gamma_mustd, Gama_mu)')
 
     parser.add_argument('--seed', type=int, default=1, help='random seed (default: 1)')
 

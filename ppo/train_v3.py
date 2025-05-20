@@ -1,6 +1,6 @@
 import os
 import torch
-from ppo.agent_v3 import MetaPPO
+from ppo.agent_v3 import MetaPPO, PPO, adapt_to_task, evaluate, result_plot, loss_plot, test
 
 import torch.distributed as dist
 
@@ -9,8 +9,11 @@ class train():
         self.initial_position, self.initial_observation = None, None
         self.terminate = False
 
-    def train(self, global_policy_net, local_policy_net, device, world_size, args, env):
-        action_space = env.action_space
+        self.env_reward = 0
+        self.eco_reward = 0
+        self.urb_reward = 0
+
+    def train(self, system_policy_net, global_policy_net, local_policy_net, device, world_size, args, env):
         reward_log = []
         average_rewards_log = []
 
@@ -23,67 +26,97 @@ class train():
         reward_urbanity_log = []
         average_rewards_urbanity_log = []
 
-        factor = ["environment", "economic", "urbanity"]
-        meta_ppo_environment = MetaPPO(device, env, args, local_policy_net[0], args.batch_size)
-        meta_ppo_economy = MetaPPO(device, env, args, local_policy_net[1], args.batch_size)
-        meta_ppo_urbanity = MetaPPO(device, env, args, local_policy_net[2], args.batch_size)
+        system_reward_log = []
+        system_average_rewards_log = []
 
-        meta_ppo_meta = MetaPPO(device, env, args, global_policy_net, args.batch_size)
+        factor = ["environment", "economic", "urbanity", "overall", "system"]
+
+        local_policy_nets = []
+
+        ppo_envivronment = PPO(args, device, local_policy_net[0])
+        ppo_economy = PPO(args, device, local_policy_net[1])
+        ppo_urbanity = PPO(args, device, local_policy_net[2])
+        overall_ppo = PPO(args, device, global_policy_net)
+        system_ppo = PPO(args, device, system_policy_net)
 
         for episode in range(args.max_episodes):
+
+            if episode == args.max_episodes - 1:
+                self.terminate = True
             torch.cuda.empty_cache()
-            print("episode:" + str(episode+1) + "in train")
-            self.initial_observation, _ = env.reset(seed=None, options=episode)
+            print("episode.:" + "" + str(episode+1) + "in train")
+            self.initial_state, _ = env.reset(seed=None, options=episode)
 
-            for rank in range(3):
+            for rank in range(world_size):
                 if rank == 0:
-                    local_policy_net[rank], loss_log1 = meta_ppo_environment.adapt_to_task(args, local_policy_net[rank], env, self.initial_observation, factor[rank], episode)
-                    total_local_reward, local_average_reward, _ = meta_ppo_environment.global_evaluate(local_policy_net[rank], env, self.initial_observation, env_update = True, factor=factor[rank], timesteps=args.max_timesteps)
-                    reward_environment_log.append(total_local_reward)
-                    average_rewards_environment_log.append(local_average_reward)
-                    if (episode + 1) % args.print_interval == 0:
+                    local_policy_net[rank]= adapt_to_task(self.initial_state, ppo_envivronment, factor[rank], env, episode, device)
+                    self.env_reward, total_env_reward, average_env_reward, _ = evaluate(self.initial_state, ppo_envivronment, factor[rank], env, episode, args, average_rewards_environment_log)
+                    reward_environment_log.append(total_env_reward)
+                    average_rewards_environment_log.append(average_env_reward)
+                    local_policy_nets.append(local_policy_net[rank])
+                    if (episode+1) % args.print_interval == 0:
                         env.plot(args, rank, meta=False)
-                        meta_ppo_environment.plot(reward_environment_log, average_rewards_environment_log, episode, factor[rank])
-
+                        result_plot(args, reward_environment_log, average_rewards_environment_log, episode, factor[rank])
+                        loss_plot(args, ppo_envivronment.loss_dict, episode, factor[rank])
                 elif rank == 1:
-                    local_policy_net[rank] = meta_ppo_economy.adapt_to_task(args, local_policy_net[rank], env, self.initial_observation, factor[rank], episode)
-                    total_local_reward, local_average_reward, _ = meta_ppo_economy.global_evaluate(local_policy_net[rank], env, self.initial_observation, env_update = True, factor=factor[rank], timesteps=args.max_timesteps)
-                    reward_economy_log.append(total_local_reward)
-                    average_rewards_economy_log.append(local_average_reward)
-                    if (episode + 1) % args.print_interval == 0:
+                    local_policy_net[rank] = adapt_to_task(self.initial_state, ppo_economy, factor[rank], env, episode, device)
+                    self.eco_reward, total_eco_reward, average_eco_reward, _ = evaluate(self.initial_state, ppo_economy, factor[rank], env, episode, args, average_rewards_economy_log)
+                    reward_economy_log.append(total_eco_reward)
+                    average_rewards_economy_log.append(average_eco_reward)
+                    local_policy_nets.append(local_policy_net[rank])
+                    if (episode+1) % args.print_interval == 0:
                         env.plot(args, rank, meta=False)
-                        meta_ppo.plot(reward_economy_log, average_rewards_economy_log, episode, factor[rank])
-
+                        result_plot(args, reward_economy_log, average_rewards_economy_log, episode, factor[rank])
+                        loss_plot(args, ppo_economy.loss_dict, episode, factor[rank])
                 elif rank == 2:
-                    local_policy_net[rank] = meta_ppo.adapt_to_task(args, local_policy_net[rank], env, self.initial_observation, factor[rank])
-                    total_local_reward, local_average_reward, _ = meta_ppo.global_evaluate(local_policy_net[rank], env, self.initial_observation, env_update = True, factor=factor[rank], timesteps=args.max_timesteps)
-                    reward_urbanity_log.append(total_local_reward)
-                    average_rewards_urbanity_log.append(local_average_reward)
-                    if (episode + 1) % args.print_interval == 0:
+                    local_policy_net[rank] = adapt_to_task(self.initial_state, ppo_urbanity, factor[rank], env, episode, device)
+                    self.urb_reward, total_urb_reward, average_urb_reward, _ = evaluate(self.initial_state, ppo_urbanity, factor[rank], env, episode, args, average_rewards_urbanity_log)
+                    reward_urbanity_log.append(total_urb_reward)
+                    average_rewards_urbanity_log.append(average_urb_reward)
+                    local_policy_nets.append(local_policy_net[rank])
+                    if (episode+1) % args.print_interval == 0:
                         env.plot(args, rank, meta=False)
-                        meta_ppo.plot(reward_urbanity_log, average_rewards_urbanity_log, episode, factor[rank])
+                        result_plot(args, reward_urbanity_log, average_rewards_urbanity_log, episode, factor[rank])
+                        loss_plot(args, ppo_urbanity.loss_dict, episode, factor[rank])
+                elif rank == 3:
+                    global_policy_net = adapt_to_task(self.initial_state, overall_ppo, factor[rank], env, episode, device)
+                    _, total_overall_log, average_overall_reward, infos = evaluate(self.initial_state, overall_ppo, factor[rank], env, episode, args, average_rewards_log, env_update=True)
+                    reward_log.append(total_overall_log)
+                    average_rewards_log.append(average_overall_reward)
 
-                    global_policy_net = meta_ppo.aggregate_local_to_global(episode, local_policy_net, global_policy_net)
-
-                    total_global_reward, global_average_reward, global_infos = meta_ppo.global_evaluate(global_policy_net, env, self.initial_observation, env_update = True, factor=None, timesteps=args.max_timesteps)
-                    reward_log.append(total_global_reward)
-                    average_rewards_log.append(global_average_reward)
-                    print("Train Episode {} | each reward: {}, meta total rewards: {}, meta average reward: {}".format(episode+1, global_infos[-1], reward_log[-1], average_rewards_log[-1]))
+                    print("Train Episode {} | last Env reward: {}, last Eco reward: {}, last Urb reward: {}, overall last Env rewards: {}, overall last Eco rewards: {}, overall last Urb rewards: {}, overall last rewards: {}, overall total rewards: {}, overall average reward: {}".format(episode + 1, self.env_reward, self.eco_reward, self.urb_reward, infos[0], infos[1],infos[2], infos[3], reward_log[-1], average_rewards_log[-1]))
 
                     if (episode+1) % args.print_interval == 0:
-                        meta_ppo.plot(reward_log, average_rewards_log, episode, factor="meta")
                         env.plot(args, rank, meta=True)
-                        print("episode done")
-                    if (episode+1) % args.save_interval == 0:
-                        torch.save(global_policy_net.state_dict(),args.ckpt_folder + '/PPO_{}_result_episode{}.pth'.format(args.env_name, episode))
+                        result_plot(args, reward_log, average_rewards_log, episode, factor[rank])
+                        loss_plot(args, overall_ppo.loss_dict, episode, factor[rank])
 
+                elif rank == 4:
+                    system_policy_net, total_system_log, average_system_reward, infos = test(self.initial_state, system_ppo, global_policy_net, local_policy_nets, factor[rank], env, episode, args, system_average_rewards_log, system=True)
+
+                    local_policy_nets = []
+
+                    system_reward_log.append(total_system_log)
+                    system_average_rewards_log.append(average_system_reward)
+
+                    if (episode+1) % args.print_interval == 0:
+                        env.plot(args, rank, meta=False)
+                        result_plot(args, system_reward_log, average_rewards_log, episode, factor[rank])
+
+                    if (episode+1) % args.save_interval == 0:
+                        torch.save(local_policy_net[0],args.ckpt_folder + '/Env_PPO_{}_result_episode{}.pth'.format(args.env_name, episode))
+                        torch.save(local_policy_net[1],args.ckpt_folder + '/Eco_PPO_{}_result_episode{}.pth'.format(args.env_name, episode))
+                        torch.save(local_policy_net[2],args.ckpt_folder + '/Urb_PPO_{}_result_episode{}.pth'.format(args.env_name, episode))
+                        torch.save(global_policy_net,args.ckpt_folder + '/overall_PPO_{}_result_episode{}.pth'.format(args.env_name,episode))
+                        torch.save(system_policy_net,args.ckpt_folder + '/system_policy_{}_result_episode{}.pth'.format(args.env_name,episode))
 
             if self.terminate:
-                torch.save(global_policy_net.state_dict(),args.ckpt_folder + '/PPO_{}_result_episode{}.pth'.format(args.env_name, episode))
-                print("Save a global policy network")
+                torch.save(local_policy_net[0],args.ckpt_folder + '/Env_PPO_{}_result_episode{}.pth'.format(args.env_name, episode))
+                torch.save(local_policy_net[1],args.ckpt_folder + '/Eco_PPO_{}_result_episode{}.pth'.format(args.env_name, episode))
+                torch.save(local_policy_net[2],args.ckpt_folder + '/Urb_PPO_{}_result_episode{}.pth'.format(args.env_name, episode))
+                torch.save(global_policy_net, args.ckpt_folder + '/overall_PPO_{}_result_episode{}.pth'.format(args.env_name, episode))
+                torch.save(system_policy_net,args.ckpt_folder + '/system_policy_{}_result_episode{}.pth'.format(args.env_name, episode))
                 break
-
-
 
 '''
 def test(args, saved_env, observation_space, action_space):
